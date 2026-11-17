@@ -13,6 +13,7 @@ const pool = new Pool({
 const app = express();
 
 app.get('/api/model', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
   try {
     const [resources, devices, links, linkPoints, frames, connectors, holders, connections, bindings] =
       await Promise.all([
@@ -42,6 +43,8 @@ app.get('/api/model', async (req, res) => {
   }
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-store')
+}));
 
 app.listen(8080, () => console.log('DSM web UI: http://localhost:8080'));
