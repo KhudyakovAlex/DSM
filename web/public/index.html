@@ -53,10 +53,13 @@
             font-size: 12px; color: var(--muted); }
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
   .legend svg { width: 22px; height: 16px; }
+  .toggle { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 10px;
+            font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
 </style>
 </head>
 <body>
 <h1>DSM — мнемосхема системы (данные из PostgreSQL)</h1>
+<label class="toggle"><input type="checkbox" id="expand"> Показать внутреннее устройство составных Device</label>
 <div id="scene"></div>
 <div id="info" aria-live="polite">
   <span class="kind" id="info-kind">схема</span><strong id="info-name">Загрузка…</strong>
@@ -92,30 +95,79 @@
     return m;
   }
 
+  var model = null;
   fetch('/api/model').then(function (r) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
-  }).then(render).catch(function (e) {
+  }).then(function (m) { model = m; render(); }).catch(function (e) {
     document.getElementById('info-name').textContent = 'Ошибка загрузки модели';
     document.getElementById('info-desc').innerHTML = '<span id="err"></span>';
     document.getElementById('err').textContent = String(e.message || e);
   });
+  document.getElementById('expand').addEventListener('change', function () { if (model) render(); });
 
-  function render(m) {
+  function render() {
+    var m = model, expanded = document.getElementById('expand').checked;
+    document.getElementById('scene').innerHTML = '';
     var devices = byId(m.devices), links = byId(m.links), frames = byId(m.frames),
         resources = byId(m.resources), connectors = byId(m.connectors), holders = byId(m.holders);
 
+    function devVisible(d) { return expanded || !d.parent_device_id; }
+    function linkVisible(l) { return expanded || !l.parent_device_id; }
+    function frameVisible(f) { return expanded || !f.parent_device_id; }
+    var vDevices = m.devices.filter(devVisible),
+        vLinks = m.links.filter(linkVisible),
+        vFrames = m.frames.filter(frameVisible);
+    var composites = m.devices.filter(function (d) {
+      return m.devices.some(function (o) { return o.parent_device_id === d.id; });
+    });
+
+    // Граничные коннекторы раскрытого составного Device: кружки на границе скрываем
+    // (проходная точка), внешние линки дотягиваем до внутренних коннекторов.
+    var hiddenConn = {}, extMap = {};
+    if (expanded) {
+      composites.forEach(function (cd) {
+        m.connectors.filter(function (c) { return c.device_id === cd.id; }).forEach(function (bc) {
+          var partners = m.connections.filter(function (p) {
+            return p.connector_a_id === bc.id || p.connector_b_id === bc.id;
+          }).map(function (p) {
+            return connectors[p.connector_a_id === bc.id ? p.connector_b_id : p.connector_a_id];
+          });
+          var inner = partners.filter(function (p) {
+            return p.device_id && devices[p.device_id].parent_device_id === cd.id;
+          });
+          if (!inner.length) return;
+          hiddenConn[bc.id] = true;
+          partners.filter(function (p) { return p.link_id && linkVisible(links[p.link_id]); }).forEach(function (ec) {
+            hiddenConn[ec.id] = true;
+            extMap[ec.link_id + '|' + ec.x + ',' + ec.y] = inner[0];
+          });
+        });
+      });
+    }
+    function connVisible(c) {
+      if (hiddenConn[c.id]) return false;
+      if (c.device_id) return devVisible(devices[c.device_id]);
+      return linkVisible(links[c.link_id]);
+    }
+    function holdVisible(h) {
+      if (h.device_id) return devVisible(devices[h.device_id]);
+      if (h.link_id) return linkVisible(links[h.link_id]);
+      return frameVisible(frames[h.frame_id]);
+    }
+    var vConns = m.connectors.filter(connVisible), vHolds = m.holders.filter(holdVisible);
+
     var xs = [], ys = [];
-    m.devices.forEach(function (d) { if (d.x != null) { xs.push(d.x - DEV_W / 2, d.x + DEV_W / 2); ys.push(d.y - DEV_H / 2, d.y + DEV_H / 2); } });
-    m.frames.forEach(function (f) { if (f.x != null) { xs.push(f.x - FRAME_HALF, f.x + FRAME_HALF); ys.push(f.y, f.base_y + 20); } });
-    m.linkPoints.forEach(function (p) { xs.push(p.x); ys.push(p.y); });
+    vDevices.forEach(function (d) { if (d.x != null) { var w = d.w || DEV_W, h = d.h || DEV_H; xs.push(d.x - w / 2, d.x + w / 2); ys.push(d.y - h / 2, d.y + h / 2); } });
+    vFrames.forEach(function (f) { if (f.x != null) { xs.push(f.x - FRAME_HALF, f.x + FRAME_HALF); ys.push(f.y, f.base_y + 20); } });
+    vLinks.forEach(function (l) { m.linkPoints.forEach(function (p) { if (p.link_id === l.id) { xs.push(p.x); ys.push(p.y); } }); });
     var minX = Math.min.apply(null, xs) - 30, maxX = Math.max.apply(null, xs) + 30,
         minY = Math.min.apply(null, ys) - 30, maxY = Math.max.apply(null, ys) + 10;
 
     var svg = el('svg', { viewBox: minX + ' ' + minY + ' ' + (maxX - minX) + ' ' + (maxY - minY), role: 'img', 'aria-label': 'Мнемосхема системы' });
     document.getElementById('scene').appendChild(svg);
 
-    var groundY = Math.max.apply(null, m.frames.map(function (f) { return f.base_y || 0; }).concat([0]));
+    var groundY = Math.max.apply(null, vFrames.map(function (f) { return f.base_y || 0; }).concat([0]));
     if (groundY) el('line', { x1: minX + 10, y1: groundY, x2: maxX - 10, y2: groundY, 'class': 'ground' }, svg);
 
     var infoKind = document.getElementById('info-kind'),
@@ -142,7 +194,25 @@
       g.addEventListener('click', function () { select(g, kind, name, desc); });
     }
 
-    m.frames.forEach(function (f) {
+    function compDesc(d) {
+      var nd = m.devices.filter(function (o) { return o.parent_device_id === d.id; }).length;
+      var nl = m.links.filter(function (o) { return o.parent_device_id === d.id; }).length;
+      var nf = m.frames.filter(function (o) { return o.parent_device_id === d.id; }).length;
+      return 'Составной Device: внутренняя схема — устройств: ' + nd + ', линков: ' + nl + ', фреймов: ' + nf + '.';
+    }
+
+    if (expanded) composites.forEach(function (d) {
+      if (d.x == null) return;
+      var w = d.w || DEV_W, h = d.h || DEV_H;
+      var g = el('g', {}, svg);
+      el('rect', { x: d.x - w / 2, y: d.y - h / 2, width: w, height: h, rx: 4, 'class': 'dev' }, g);
+      txt(g, d.x, d.y - h / 2 + 18, d.name);
+      txt(g, d.x, d.y - h / 2 + 33, 'Device (составной)', 'sub');
+      el('rect', { x: d.x - w / 2, y: d.y - h / 2, width: w, height: h, 'class': 'hit' }, g);
+      clickable(g, 'Device', d.name, compDesc(d));
+    });
+
+    vFrames.forEach(function (f) {
       if (f.x == null) return;
       var g = el('g', {}, svg);
       el('polygon', { points: f.x + ',' + f.y + ' ' + (f.x - FRAME_HALF) + ',' + f.base_y + ' ' + (f.x + FRAME_HALF) + ',' + f.base_y, 'class': 'frame' }, g);
@@ -152,14 +222,20 @@
       clickable(g, 'Frame', f.name, 'Несущая конструкция: ресурс не передаёт, коннекторов нет. Креплений (Holder): ' + hs.length + '.');
     });
 
-    m.links.forEach(function (l) {
+    vLinks.forEach(function (l) {
       var pts = m.linkPoints.filter(function (p) { return p.link_id === l.id; });
       if (!pts.length) return;
       var g = el('g', {}, svg);
       var lines = {};
       pts.forEach(function (p) { (lines[p.line_no] = lines[p.line_no] || []).push(p); });
       Object.keys(lines).forEach(function (k) {
-        var str = lines[k].map(function (p) { return p.x + ',' + p.y; }).join(' ');
+        var arr = lines[k].slice();
+        var first = arr[0], last = arr[arr.length - 1];
+        var e1 = extMap[l.id + '|' + first.x + ',' + first.y];
+        if (e1) arr.unshift(e1);
+        var e2 = extMap[l.id + '|' + last.x + ',' + last.y];
+        if (e2) arr.push(e2);
+        var str = arr.map(function (p) { return p.x + ',' + p.y; }).join(' ');
         el('polyline', { points: str, 'class': 'link' }, g);
         el('polyline', { points: str, 'class': 'hit' }, g);
       });
@@ -171,16 +247,21 @@
       clickable(g, 'Link', l.name, 'Пассивно передаёт ресурс без изменения его вида. Ресурс: ' + res + '. Коннекторов: ' + cs.length + '.' + comp);
     });
 
-    m.devices.forEach(function (d) {
+    vDevices.forEach(function (d) {
       if (d.x == null) return;
+      if (expanded && composites.indexOf(d) >= 0) return;
+      var w = d.w || DEV_W, h = d.h || DEV_H;
+      var isComp = composites.indexOf(d) >= 0;
       var g = el('g', {}, svg);
-      el('rect', { x: d.x - DEV_W / 2, y: d.y - DEV_H / 2, width: DEV_W, height: DEV_H, rx: 4, 'class': 'dev' }, g);
+      el('rect', { x: d.x - w / 2, y: d.y - h / 2, width: w, height: h, rx: 4, 'class': 'dev' }, g);
       txt(g, d.x, d.y - 3, d.name);
-      txt(g, d.x, d.y + 14, 'Device', 'sub');
+      txt(g, d.x, d.y + 14, isComp ? 'Device (составной)' : 'Device', 'sub');
       var cs = m.connectors.filter(function (c) { return c.device_id === d.id; });
       var hs = m.holders.filter(function (h) { return h.device_id === d.id; });
       var parent = d.parent_device_id ? ' Входит в состав: ' + devices[d.parent_device_id].name + '.' : '';
-      clickable(g, 'Device', d.name, 'Преобразует, накапливает, отдаёт или регулирует ресурс. Коннекторов: ' + cs.length + ', креплений: ' + hs.length + '.' + parent);
+      var desc = 'Преобразует, накапливает, отдаёт или регулирует ресурс. Коннекторов: ' + cs.length + ', креплений: ' + hs.length + '.' + parent;
+      if (isComp) desc += ' ' + compDesc(d);
+      clickable(g, 'Device', d.name, desc);
     });
 
     function ownerName(c) {
@@ -215,8 +296,8 @@
         }
       });
     }
-    drawPorts(m.connectors, 'conn', 'Connector', 6, m.connections, 'connector_a_id', 'connector_b_id', connectors);
-    drawPorts(m.holders, 'hold', 'Holder', 7, m.bindings, 'holder_a_id', 'holder_b_id', holders);
+    drawPorts(vConns, 'conn', 'Connector', 6, m.connections, 'connector_a_id', 'connector_b_id', connectors);
+    drawPorts(vHolds, 'hold', 'Holder', 7, m.bindings, 'holder_a_id', 'holder_b_id', holders);
 
     svg.addEventListener('click', function (e) {
       if (!e.target.closest('.el')) select(null);

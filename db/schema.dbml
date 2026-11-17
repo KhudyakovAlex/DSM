@@ -16,8 +16,10 @@ Table device {
   parent_device_id integer [ref: > device.id]
   x double
   y double
+  w double
+  h double
 
-  Note: 'Устройство: преобразует, накапливает, отдаёт или регулирует ресурс. Составное Device содержит внутреннюю схему (Device + Link). Размещение — точка (x, y)'
+  Note: 'Устройство: преобразует, накапливает, отдаёт или регулирует ресурс. Составное Device содержит внутреннюю схему (Device + Link + Frame). Размещение — точка (x, y); w, h — габарит составного Device'
 }
 
 Table link {
@@ -77,7 +79,7 @@ Table holder {
   Note: 'Крепление: деталь или зона контакта. Ровно один владелец: Device, Link или Frame (CHECK holder_one_owner)'
 }
 
-Table resource_connection {
+Table connector_plug {
   id integer [pk, increment]
   connector_a_id integer [not null, ref: > connector.id]
   connector_b_id integer [not null, ref: > connector.id]
@@ -85,7 +87,7 @@ Table resource_connection {
   Note: 'Пара Connector↔Connector (через Link или прямой контакт). CHECK a < b; UNIQUE (a, b)'
 }
 
-Table mechanical_binding {
+Table holder_plug {
   id integer [pk, increment]
   holder_a_id integer [not null, ref: > holder.id]
   holder_b_id integer [not null, ref: > holder.id]

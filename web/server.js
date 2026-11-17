@@ -23,8 +23,8 @@ app.get('/api/model', async (req, res) => {
         pool.query('SELECT * FROM frame ORDER BY id'),
         pool.query('SELECT * FROM connector ORDER BY id'),
         pool.query('SELECT * FROM holder ORDER BY id'),
-        pool.query('SELECT * FROM resource_connection ORDER BY id'),
-        pool.query('SELECT * FROM mechanical_binding ORDER BY id')
+        pool.query('SELECT * FROM connector_plug ORDER BY id'),
+        pool.query('SELECT * FROM holder_plug ORDER BY id')
       ]);
     res.json({
       resources: resources.rows,
