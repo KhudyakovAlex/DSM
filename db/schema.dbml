@@ -1,0 +1,94 @@
+// Схема ядра DSM (учебная, только текущие сущности).
+// Дублирует db/init.sql. Сущности: Device, Link, Frame, Resource, Connector, Holder.
+// Ресурсное соединение = пара Connector↔Connector; механическая привязка = пара Holder↔Holder.
+// Координаты — для отрисовки мнемосхемы веб-интерфейсом.
+
+Table resource {
+  id integer [pk, increment]
+  name text [not null, unique]
+
+  Note: 'Профиль ресурса; один экземпляр на профиль во всей модели (вода, электричество 230В, данные DALI…)'
+}
+
+Table device {
+  id integer [pk, increment]
+  name text [not null]
+  parent_device_id integer [ref: > device.id]
+  x double
+  y double
+
+  Note: 'Устройство: преобразует, накапливает, отдаёт или регулирует ресурс. Составное Device содержит внутреннюю схему (Device + Link). Размещение — точка (x, y)'
+}
+
+Table link {
+  id integer [pk, increment]
+  name text [not null]
+  resource_id integer [ref: > resource.id]
+  parent_device_id integer [ref: > device.id]
+  parent_link_id integer [ref: > link.id]
+
+  Note: 'Соединение: пассивно передаёт ресурс без изменения его вида. Составной Link (кабель → жилы); может входить в состав Device. Трасса — в link_point'
+}
+
+Table link_point {
+  id integer [pk, increment]
+  link_id integer [not null, ref: > link.id]
+  line_no integer [not null, default: 1]
+  ord integer [not null]
+  x double [not null]
+  y double [not null]
+
+  Note: 'Точка трассы Link; line_no — ветвь трассы (разветвление без разделения Link), ord — порядок точек'
+}
+
+Table frame {
+  id integer [pk, increment]
+  name text [not null]
+  parent_device_id integer [ref: > device.id]
+  parent_frame_id integer [ref: > frame.id]
+  x double
+  y double
+  base_y double
+
+  Note: 'Несущая конструкция: ресурс не передаёт, коннекторов нет. (x, y) — вершина, base_y — уровень основания'
+}
+
+Table connector {
+  id integer [pk, increment]
+  name text [not null]
+  device_id integer [ref: > device.id]
+  link_id integer [ref: > link.id]
+  resource_id integer [ref: > resource.id]
+  x double
+  y double
+
+  Note: 'Разъём: точка подключения ресурса. Ровно один владелец: Device или Link (CHECK connector_one_owner)'
+}
+
+Table holder {
+  id integer [pk, increment]
+  name text [not null]
+  device_id integer [ref: > device.id]
+  link_id integer [ref: > link.id]
+  frame_id integer [ref: > frame.id]
+  x double
+  y double
+
+  Note: 'Крепление: деталь или зона контакта. Ровно один владелец: Device, Link или Frame (CHECK holder_one_owner)'
+}
+
+Table resource_connection {
+  id integer [pk, increment]
+  connector_a_id integer [not null, ref: > connector.id]
+  connector_b_id integer [not null, ref: > connector.id]
+
+  Note: 'Пара Connector↔Connector (через Link или прямой контакт). CHECK a < b; UNIQUE (a, b)'
+}
+
+Table mechanical_binding {
+  id integer [pk, increment]
+  holder_a_id integer [not null, ref: > holder.id]
+  holder_b_id integer [not null, ref: > holder.id]
+
+  Note: 'Пара Holder↔Holder (контакт с Frame). CHECK a < b; UNIQUE (a, b)'
+}

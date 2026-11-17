@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSM — мнемосхема</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --fg: light-dark(#1a1a1a, #e8e8e8);
+    --muted: light-dark(#6b7280, #9ca3af);
+    --bg: light-dark(#ffffff, #16181d);
+    --card: light-dark(#f6f7f9, #1f2229);
+    --border: light-dark(#d7dae0, #3a3f4a);
+    --dev-fill: light-dark(#eef1f5, #262a33);
+    --frame-fill: light-dark(#f3f4f6, #20232b);
+    --link: light-dark(#2563eb, #60a5fa);
+    --holder: light-dark(#d97706, #fbbf24);
+    --accent: light-dark(#7c3aed, #a78bfa);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg);
+         font: 400 13px/1.45 system-ui, sans-serif; }
+  h1 { font-size: 14px; font-weight: 500; margin: 0 0 10px; }
+  svg { width: 100%; height: auto; display: block; }
+  .ground { stroke: var(--border); stroke-width: 1.5; }
+  rect.dev { fill: var(--dev-fill); stroke: var(--fg); stroke-width: 1.5; }
+  polygon.frame { fill: var(--frame-fill); stroke: var(--muted); stroke-width: 1.5; }
+  polyline.link { stroke: var(--link); stroke-width: 2.5; fill: none; }
+  circle.conn { fill: var(--link); }
+  circle.hold { fill: none; stroke: var(--holder); stroke-width: 2; }
+  text { fill: var(--fg); font-size: 13px; }
+  text.sub, text.flabel { fill: var(--muted); font-size: 11px; }
+  .hit { fill: transparent; stroke: none; }
+  polyline.hit { fill: none; stroke: transparent; stroke-width: 16; pointer-events: stroke; }
+  .el { cursor: pointer; }
+  svg.has-sel .el { opacity: .3; }
+  svg.has-sel .el.sel { opacity: 1; }
+  .el.sel rect.dev, .el.sel polygon.frame { stroke: var(--accent); stroke-width: 2.5; }
+  .el.sel polyline.link { stroke: var(--accent); stroke-width: 3.5; }
+  .el.sel circle.conn { fill: var(--accent); }
+  .el.sel circle.hold { stroke: var(--accent); stroke-width: 3; }
+  .el.sel text { fill: var(--accent); }
+  #info { margin-top: 12px; padding: 10px 12px; background: var(--card);
+          border: 1px solid var(--border); border-radius: 8px; }
+  #info .kind { display: inline-block; padding: 1px 8px; margin-right: 8px;
+                border: 1px solid var(--border); border-radius: 10px;
+                font-size: 11px; color: var(--muted); }
+  #info strong { font-weight: 500; }
+  #info p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+  #err { color: light-dark(#b91c1c, #f87171); }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 10px;
+            font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend svg { width: 22px; height: 16px; }
+</style>
+</head>
+<body>
+<h1>DSM — мнемосхема системы (данные из PostgreSQL)</h1>
+<div id="scene"></div>
+<div id="info" aria-live="polite">
+  <span class="kind" id="info-kind">схема</span><strong id="info-name">Загрузка…</strong>
+  <p id="info-desc"></p>
+</div>
+<div class="legend">
+  <span><svg viewBox="0 0 22 16"><rect x="2" y="2" width="18" height="12" rx="2" fill="var(--dev-fill)" stroke="var(--fg)" stroke-width="1.5"/></svg>Device</span>
+  <span><svg viewBox="0 0 22 16"><line x1="1" y1="8" x2="21" y2="8" stroke="var(--link)" stroke-width="2.5"/></svg>Link</span>
+  <span><svg viewBox="0 0 22 16"><polygon points="11,2 3,14 19,14" fill="var(--frame-fill)" stroke="var(--muted)" stroke-width="1.5"/></svg>Frame</span>
+  <span><svg viewBox="0 0 22 16"><circle cx="11" cy="8" r="5" fill="var(--link)"/></svg>Connector</span>
+  <span><svg viewBox="0 0 22 16"><circle cx="11" cy="8" r="5" fill="none" stroke="var(--holder)" stroke-width="2"/></svg>Holder</span>
+</div>
+<script>
+(function () {
+  var NS = 'http://www.w3.org/2000/svg';
+  var DEV_W = 120, DEV_H = 50, FRAME_HALF = 30;
+
+  function el(tag, attrs, parent) {
+    var n = document.createElementNS(NS, tag);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  function txt(parent, x, y, str, cls) {
+    var t = el('text', { x: x, y: y, 'text-anchor': 'middle' }, parent);
+    if (cls) t.setAttribute('class', cls);
+    t.textContent = str;
+    return t;
+  }
+  function byId(rows) {
+    var m = {};
+    rows.forEach(function (r) { m[r.id] = r; });
+    return m;
+  }
+
+  fetch('/api/model').then(function (r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(render).catch(function (e) {
+    document.getElementById('info-name').textContent = 'Ошибка загрузки модели';
+    document.getElementById('info-desc').innerHTML = '<span id="err"></span>';
+    document.getElementById('err').textContent = String(e.message || e);
+  });
+
+  function render(m) {
+    var devices = byId(m.devices), links = byId(m.links), frames = byId(m.frames),
+        resources = byId(m.resources), connectors = byId(m.connectors), holders = byId(m.holders);
+
+    var xs = [], ys = [];
+    m.devices.forEach(function (d) { if (d.x != null) { xs.push(d.x - DEV_W / 2, d.x + DEV_W / 2); ys.push(d.y - DEV_H / 2, d.y + DEV_H / 2); } });
+    m.frames.forEach(function (f) { if (f.x != null) { xs.push(f.x - FRAME_HALF, f.x + FRAME_HALF); ys.push(f.y, f.base_y + 20); } });
+    m.linkPoints.forEach(function (p) { xs.push(p.x); ys.push(p.y); });
+    var minX = Math.min.apply(null, xs) - 30, maxX = Math.max.apply(null, xs) + 30,
+        minY = Math.min.apply(null, ys) - 30, maxY = Math.max.apply(null, ys) + 10;
+
+    var svg = el('svg', { viewBox: minX + ' ' + minY + ' ' + (maxX - minX) + ' ' + (maxY - minY), role: 'img', 'aria-label': 'Мнемосхема системы' });
+    document.getElementById('scene').appendChild(svg);
+
+    var groundY = Math.max.apply(null, m.frames.map(function (f) { return f.base_y || 0; }).concat([0]));
+    if (groundY) el('line', { x1: minX + 10, y1: groundY, x2: maxX - 10, y2: groundY, 'class': 'ground' }, svg);
+
+    var infoKind = document.getElementById('info-kind'),
+        infoName = document.getElementById('info-name'),
+        infoDesc = document.getElementById('info-desc');
+
+    function select(g, kind, name, desc) {
+      svg.querySelectorAll('.el').forEach(function (n) { n.classList.remove('sel'); });
+      if (!g) {
+        svg.classList.remove('has-sel');
+        infoKind.textContent = 'схема';
+        infoName.textContent = 'Выберите элемент';
+        infoDesc.textContent = 'Кликните по элементу схемы. Клик по пустому месту или Esc — сброс выделения.';
+        return;
+      }
+      g.classList.add('sel');
+      svg.classList.add('has-sel');
+      infoKind.textContent = kind;
+      infoName.textContent = name;
+      infoDesc.textContent = desc;
+    }
+    function clickable(g, kind, name, desc) {
+      g.setAttribute('class', 'el');
+      g.addEventListener('click', function () { select(g, kind, name, desc); });
+    }
+
+    m.frames.forEach(function (f) {
+      if (f.x == null) return;
+      var g = el('g', {}, svg);
+      el('polygon', { points: f.x + ',' + f.y + ' ' + (f.x - FRAME_HALF) + ',' + f.base_y + ' ' + (f.x + FRAME_HALF) + ',' + f.base_y, 'class': 'frame' }, g);
+      txt(g, f.x, f.base_y + 18, f.name, 'flabel');
+      el('polygon', { points: f.x + ',' + (f.y - 10) + ' ' + (f.x - FRAME_HALF - 10) + ',' + (f.base_y + 5) + ' ' + (f.x + FRAME_HALF + 10) + ',' + (f.base_y + 5), 'class': 'hit' }, g);
+      var hs = m.holders.filter(function (h) { return h.frame_id === f.id; });
+      clickable(g, 'Frame', f.name, 'Несущая конструкция: ресурс не передаёт, коннекторов нет. Креплений (Holder): ' + hs.length + '.');
+    });
+
+    m.links.forEach(function (l) {
+      var pts = m.linkPoints.filter(function (p) { return p.link_id === l.id; });
+      if (!pts.length) return;
+      var g = el('g', {}, svg);
+      var lines = {};
+      pts.forEach(function (p) { (lines[p.line_no] = lines[p.line_no] || []).push(p); });
+      Object.keys(lines).forEach(function (k) {
+        var str = lines[k].map(function (p) { return p.x + ',' + p.y; }).join(' ');
+        el('polyline', { points: str, 'class': 'link' }, g);
+        el('polyline', { points: str, 'class': 'hit' }, g);
+      });
+      var cs = m.connectors.filter(function (c) { return c.link_id === l.id; });
+      var res = l.resource_id ? resources[l.resource_id].name : 'не задан';
+      var kids = m.links.filter(function (o) { return o.parent_link_id === l.id; });
+      var comp = l.parent_link_id ? ' Входит в состав Link: ' + links[l.parent_link_id].name + '.' : '';
+      if (kids.length) comp += ' Составной Link, секций: ' + kids.length + '.';
+      clickable(g, 'Link', l.name, 'Пассивно передаёт ресурс без изменения его вида. Ресурс: ' + res + '. Коннекторов: ' + cs.length + '.' + comp);
+    });
+
+    m.devices.forEach(function (d) {
+      if (d.x == null) return;
+      var g = el('g', {}, svg);
+      el('rect', { x: d.x - DEV_W / 2, y: d.y - DEV_H / 2, width: DEV_W, height: DEV_H, rx: 4, 'class': 'dev' }, g);
+      txt(g, d.x, d.y - 3, d.name);
+      txt(g, d.x, d.y + 14, 'Device', 'sub');
+      var cs = m.connectors.filter(function (c) { return c.device_id === d.id; });
+      var hs = m.holders.filter(function (h) { return h.device_id === d.id; });
+      var parent = d.parent_device_id ? ' Входит в состав: ' + devices[d.parent_device_id].name + '.' : '';
+      clickable(g, 'Device', d.name, 'Преобразует, накапливает, отдаёт или регулирует ресурс. Коннекторов: ' + cs.length + ', креплений: ' + hs.length + '.' + parent);
+    });
+
+    function ownerName(c) {
+      if (c.device_id) return devices[c.device_id].name;
+      if (c.link_id) return links[c.link_id].name;
+      if (c.frame_id) return frames[c.frame_id].name;
+      return '—';
+    }
+    function drawPorts(rows, cls, kind, r, pairRows, aKey, bKey, otherMap) {
+      var seen = {};
+      rows.forEach(function (c) {
+        if (c.x == null) return;
+        var key = c.x + ':' + c.y;
+        var same = rows.filter(function (o) { return o.x === c.x && o.y === c.y; });
+        var g = seen[key];
+        if (!g) {
+          g = el('g', {}, svg);
+          el('circle', { cx: c.x, cy: c.y, r: r, 'class': cls }, g);
+          el('circle', { cx: c.x, cy: c.y, r: 16, 'class': 'hit' }, g);
+          seen[key] = g;
+          var names = same.map(function (o) { return o.name + ' (' + ownerName(o) + ')'; }).join('; ');
+          var pairs = pairRows.filter(function (p) {
+            return same.some(function (o) { return o.id === p[aKey] || o.id === p[bKey]; });
+          }).map(function (p) {
+            var otherId = same.some(function (o) { return o.id === p[aKey]; }) ? p[bKey] : p[aKey];
+            var other = otherMap[otherId];
+            return other ? other.name + ' (' + ownerName(other) + ')' : '—';
+          });
+          var res = c.resource_id && resources[c.resource_id] ? ' Ресурс: ' + resources[c.resource_id].name + '.' : '';
+          var desc = names + '.' + (pairs.length ? ' Связан с: ' + pairs.join('; ') + '.' : '') + res;
+          clickable(g, kind, same.map(function (o) { return o.name; }).join(' ↔ '), desc);
+        }
+      });
+    }
+    drawPorts(m.connectors, 'conn', 'Connector', 6, m.connections, 'connector_a_id', 'connector_b_id', connectors);
+    drawPorts(m.holders, 'hold', 'Holder', 7, m.bindings, 'holder_a_id', 'holder_b_id', holders);
+
+    svg.addEventListener('click', function (e) {
+      if (!e.target.closest('.el')) select(null);
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') select(null);
+    });
+
+    select(null);
+  }
+})();
+</script>
+</body>
+</html>
