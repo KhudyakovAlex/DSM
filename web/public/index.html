@@ -13,6 +13,7 @@
     --card: light-dark(#f6f7f9, #1f2229);
     --border: light-dark(#d7dae0, #3a3f4a);
     --dev-fill: light-dark(#eef1f5, #262a33);
+    --dev: light-dark(#16a34a, #4ade80);
     --frame-fill: light-dark(#f3f4f6, #20232b);
     --link: light-dark(#2563eb, #60a5fa);
     --holder: light-dark(#d97706, #fbbf24);
@@ -23,20 +24,28 @@
          font: 400 13px/1.45 system-ui, sans-serif; }
   h1 { font-size: 14px; font-weight: 500; margin: 0 0 10px; }
   svg { width: 100%; height: auto; display: block; }
-  .ground { stroke: var(--border); stroke-width: 1.5; }
-  rect.dev { fill: var(--dev-fill); stroke: var(--fg); stroke-width: 1.5; }
-  polygon.frame { fill: var(--frame-fill); stroke: var(--muted); stroke-width: 1.5; }
+  rect.dev { fill: var(--dev-fill); fill-opacity: .8; stroke: var(--dev); stroke-width: 1.5; }
+  rect.frame-rect { fill: var(--frame-fill); stroke: var(--holder); stroke-width: 1.5; stroke-dasharray: 5 4; }
   polyline.link { stroke: var(--link); stroke-width: 2.5; fill: none; }
   circle.conn { fill: var(--link); }
   circle.hold { fill: none; stroke: var(--holder); stroke-width: 2; }
   text { fill: var(--fg); font-size: 13px; }
-  text.sub, text.flabel { fill: var(--muted); font-size: 11px; }
+  text.sub, text.flabel { font-size: 11px; }
+  text.dlabel { fill: var(--dev); }
+  text.flabel { fill: var(--holder); }
+  text.llabel { fill: var(--link); font-size: 11px; cursor: pointer;
+                paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
   .hit { fill: transparent; stroke: none; }
   polyline.hit { fill: none; stroke: transparent; stroke-width: 16; pointer-events: stroke; }
   .el { cursor: pointer; }
+  .xbtn { cursor: pointer; }
+  .xbtn rect { fill: var(--card); stroke: var(--dev); stroke-width: 1.5; }
+  .xbtn line { stroke: var(--dev); stroke-width: 1.5; }
   svg.has-sel .el { opacity: .3; }
   svg.has-sel .el.sel { opacity: 1; }
-  .el.sel rect.dev, .el.sel polygon.frame { stroke: var(--accent); stroke-width: 2.5; }
+  svg.has-sel text.llabel { opacity: .3; }
+  svg.has-sel text.llabel.sel { opacity: 1; fill: var(--accent); }
+  .el.sel rect.dev, .el.sel rect.frame-rect { stroke: var(--accent); stroke-width: 2.5; }
   .el.sel polyline.link { stroke: var(--accent); stroke-width: 3.5; }
   .el.sel circle.conn { fill: var(--accent); }
   .el.sel circle.hold { stroke: var(--accent); stroke-width: 3; }
@@ -53,29 +62,26 @@
             font-size: 12px; color: var(--muted); }
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
   .legend svg { width: 22px; height: 16px; }
-  .toggle { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 10px;
-            font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
 </style>
 </head>
 <body>
 <h1>DSM — мнемосхема системы (данные из PostgreSQL)</h1>
-<label class="toggle"><input type="checkbox" id="expand"> Показать внутреннее устройство составных Device</label>
 <div id="scene"></div>
 <div id="info" aria-live="polite">
   <span class="kind" id="info-kind">схема</span><strong id="info-name">Загрузка…</strong>
   <p id="info-desc"></p>
 </div>
 <div class="legend">
-  <span><svg viewBox="0 0 22 16"><rect x="2" y="2" width="18" height="12" rx="2" fill="var(--dev-fill)" stroke="var(--fg)" stroke-width="1.5"/></svg>Device</span>
+  <span><svg viewBox="0 0 22 16"><rect x="2" y="2" width="18" height="12" rx="2" fill="var(--dev-fill)" stroke="var(--dev)" stroke-width="1.5"/></svg>Device</span>
   <span><svg viewBox="0 0 22 16"><line x1="1" y1="8" x2="21" y2="8" stroke="var(--link)" stroke-width="2.5"/></svg>Link</span>
-  <span><svg viewBox="0 0 22 16"><polygon points="11,2 3,14 19,14" fill="var(--frame-fill)" stroke="var(--muted)" stroke-width="1.5"/></svg>Frame</span>
+  <span><svg viewBox="0 0 22 16"><rect x="2" y="2" width="18" height="12" rx="2" fill="var(--frame-fill)" stroke="var(--holder)" stroke-width="1.5" stroke-dasharray="3 2"/></svg>Frame</span>
   <span><svg viewBox="0 0 22 16"><circle cx="11" cy="8" r="5" fill="var(--link)"/></svg>Connector</span>
   <span><svg viewBox="0 0 22 16"><circle cx="11" cy="8" r="5" fill="none" stroke="var(--holder)" stroke-width="2"/></svg>Holder</span>
 </div>
 <script>
 (function () {
   var NS = 'http://www.w3.org/2000/svg';
-  var DEV_W = 120, DEV_H = 50, FRAME_HALF = 30;
+  var DEV_W = 120, DEV_H = 50, FRAME_HALF = 30, FRAME_PAD = 14;
 
   function el(tag, attrs, parent) {
     var n = document.createElementNS(NS, tag);
@@ -94,8 +100,47 @@
     rows.forEach(function (r) { m[r.id] = r; });
     return m;
   }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  // Внутреннее содержимое составного Device показывается только во второй
+  // половине раскрытия: иначе полноразмерные подписи и объекты налезают
+  // на ещё маленький контейнер при сворачивании/раскрытии.
+  function fadeInner(t) { return t <= 0.5 ? 0 : (2 * t - 1) * (2 * t - 1); }
 
-  var model = null;
+  // Ортогональная перестройка трассы: концы могли сместиться (проекция портов
+  // на границу свёрнутого Device), ориентации сегментов берутся из хранимой трассы.
+  function orthoRoute(pts, orig) {
+    var n = pts.length;
+    if (n < 2) return pts.slice();
+    function horiz(i) {
+      return Math.abs(orig[i + 1].x - orig[i].x) >= Math.abs(orig[i + 1].y - orig[i].y);
+    }
+    var out = [pts[0]];
+    for (var i = 1; i < n - 1; i++) {
+      out.push(horiz(i - 1) ? { x: pts[i].x, y: out[i - 1].y } : { x: out[i - 1].x, y: pts[i].y });
+    }
+    var a = out[out.length - 1], b = pts[n - 1];
+    if (a.x !== b.x && a.y !== b.y) {
+      if (n === 2) {
+        if (horiz(0)) {
+          var mx = (a.x + b.x) / 2;
+          out.push({ x: mx, y: a.y }, { x: mx, y: b.y });
+        } else {
+          var my = (a.y + b.y) / 2;
+          out.push({ x: a.x, y: my }, { x: b.x, y: my });
+        }
+      } else if (horiz(n - 2)) out.push({ x: a.x, y: b.y });
+      else out.push({ x: b.x, y: a.y });
+    }
+    out.push(b);
+    return out.filter(function (p, i) { return i === 0 || p.x !== out[i - 1].x || p.y !== out[i - 1].y; });
+  }
+
+  var model = null, anim = {}, raf = null, deselect = function () {};
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') deselect();
+  });
+
   fetch('/api/model').then(function (r) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
@@ -104,83 +149,345 @@
     document.getElementById('info-desc').innerHTML = '<span id="err"></span>';
     document.getElementById('err').textContent = String(e.message || e);
   });
-  document.getElementById('expand').addEventListener('change', function () { if (model) render(); });
 
-  function render() {
-    var m = model, expanded = document.getElementById('expand').checked;
-    document.getElementById('scene').innerHTML = '';
+  function toggle(id) {
+    var from = anim[id] || 0, to = from < 0.5 ? 1 : 0, t0 = performance.now();
+    if (raf) cancelAnimationFrame(raf);
+    function step(now) {
+      var p = Math.min(1, (now - t0) / 350);
+      var e = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+      anim[id] = from + (to - from) * e;
+      render();
+      if (p < 1) raf = requestAnimationFrame(step);
+      else { anim[id] = to; raf = null; render(); }
+    }
+    raf = requestAnimationFrame(step);
+  }
+
+  // Расчёт геометрии сцены при заданной степени раскрытия составных Device (0..1).
+  function buildLayout(tMap) {
+    var m = model;
     var devices = byId(m.devices), links = byId(m.links), frames = byId(m.frames),
         resources = byId(m.resources), connectors = byId(m.connectors), holders = byId(m.holders);
+    var compIds = {};
+    m.devices.forEach(function (d) {
+      if (m.devices.some(function (o) { return o.parent_device_id === d.id; })) compIds[d.id] = true;
+    });
+    function tOf(id) { return tMap[id] || 0; }
+    function isComp(d) { return !!compIds[d.id]; }
+    function devSize(d) {
+      if (!isComp(d)) return { w: DEV_W, h: DEV_H, t: 0 };
+      var t = tOf(d.id);
+      return { w: lerp(DEV_W, d.w || DEV_W, t), h: lerp(DEV_H, d.h || DEV_H, t), t: t };
+    }
+    function collapsedPort(d, c) {
+      var dx = c.x - d.x, dy = c.y - d.y;
+      if (Math.abs(dx) >= Math.abs(dy)) return { x: d.x + (dx < 0 ? -1 : 1) * DEV_W / 2, y: d.y };
+      return { x: d.x, y: d.y + (dy < 0 ? -1 : 1) * DEV_H / 2 };
+    }
+    function connPos(c) {
+      var o = c.device_id ? devices[c.device_id] : null;
+      if (o && isComp(o)) {
+        var cp = collapsedPort(o, c), t = tOf(o.id);
+        return { x: lerp(cp.x, c.x, t), y: lerp(cp.y, c.y, t) };
+      }
+      var b = boundary[c.id];
+      if (b) return connPos(b.bc);
+      return { x: c.x, y: c.y };
+    }
+    function holdPos(h) {
+      // Крепление Frame едет за объектом, который он держит: позиция выводится
+      // из парного Holder (Device/Link), а не хранится независимо.
+      if (h.frame_id) {
+        var pr = null;
+        for (var i = 0; i < m.bindings.length; i++) {
+          var p = m.bindings[i];
+          if (p.holder_a_id === h.id) { pr = holders[p.holder_b_id]; break; }
+          if (p.holder_b_id === h.id) { pr = holders[p.holder_a_id]; break; }
+        }
+        if (pr && !pr.frame_id) return holdPos(pr);
+        return { x: h.x, y: h.y };
+      }
+      var o = h.device_id ? devices[h.device_id] : null;
+      if (o && isComp(o)) {
+        var t = tOf(o.id);
+        var cx = Math.max(o.x - DEV_W / 2, Math.min(o.x + DEV_W / 2, h.x));
+        return { x: lerp(cx, h.x, t), y: lerp(o.y + DEV_H / 2, h.y, t) };
+      }
+      return { x: h.x, y: h.y };
+    }
 
-    function devVisible(d) { return expanded || !d.parent_device_id; }
-    function linkVisible(l) { return expanded || !l.parent_device_id; }
-    function frameVisible(f) { return expanded || !f.parent_device_id; }
-    var vDevices = m.devices.filter(devVisible),
-        vLinks = m.links.filter(linkVisible),
-        vFrames = m.frames.filter(frameVisible);
-    var composites = m.devices.filter(function (d) {
-      return m.devices.some(function (o) { return o.parent_device_id === d.id; });
+    // Граничные коннекторы составных Device и их связи с внешними линками.
+    var boundary = {}, bcHasInner = {};
+    Object.keys(compIds).forEach(function (cid) {
+      var cd = devices[cid];
+      m.connectors.filter(function (c) { return c.device_id === cd.id; }).forEach(function (bc) {
+        var partners = m.connections.filter(function (p) {
+          return p.connector_a_id === bc.id || p.connector_b_id === bc.id;
+        }).map(function (p) {
+          return connectors[p.connector_a_id === bc.id ? p.connector_b_id : p.connector_a_id];
+        });
+        var inner = partners.filter(function (p) {
+          return p.device_id && devices[p.device_id].parent_device_id === cd.id;
+        });
+        bcHasInner[bc.id] = inner.length > 0;
+        partners.filter(function (p) { return p.link_id; }).forEach(function (ec) {
+          boundary[ec.id] = { bc: bc, inner: inner[0] || null, cd: cd };
+        });
+      });
     });
 
-    // Граничные коннекторы раскрытого составного Device: кружки на границе скрываем
-    // (проходная точка), внешние линки дотягиваем до внутренних коннекторов.
-    var hiddenConn = {}, extMap = {};
-    if (expanded) {
-      composites.forEach(function (cd) {
-        m.connectors.filter(function (c) { return c.device_id === cd.id; }).forEach(function (bc) {
-          var partners = m.connections.filter(function (p) {
-            return p.connector_a_id === bc.id || p.connector_b_id === bc.id;
-          }).map(function (p) {
-            return connectors[p.connector_a_id === bc.id ? p.connector_b_id : p.connector_a_id];
-          });
-          var inner = partners.filter(function (p) {
-            return p.device_id && devices[p.device_id].parent_device_id === cd.id;
-          });
-          if (!inner.length) return;
-          hiddenConn[bc.id] = true;
-          partners.filter(function (p) { return p.link_id && linkVisible(links[p.link_id]); }).forEach(function (ec) {
-            hiddenConn[ec.id] = true;
-            extMap[ec.link_id + '|' + ec.x + ',' + ec.y] = inner[0];
-          });
+    function connOpacity(c) {
+      if (c.link_id) {
+        var l = links[c.link_id];
+        if (l.parent_device_id) return fadeInner(tOf(l.parent_device_id));
+        var b = boundary[c.id];
+        if (b && b.inner) return 1 - tOf(b.cd.id);
+        return 1;
+      }
+      var o = devices[c.device_id];
+      if (o.parent_device_id) return fadeInner(tOf(o.parent_device_id));
+      if (isComp(o) && bcHasInner[c.id]) return 1 - tOf(o.id);
+      return 1;
+    }
+    function holdOpacity(h) {
+      if (h.device_id) { var o = devices[h.device_id]; return o.parent_device_id ? fadeInner(tOf(o.parent_device_id)) : 1; }
+      if (h.link_id) { var l = links[h.link_id]; return l.parent_device_id ? fadeInner(tOf(l.parent_device_id)) : 1; }
+      var f = frames[h.frame_id];
+      return f.parent_device_id ? fadeInner(tOf(f.parent_device_id)) : 1;
+    }
+    function frameGeom(f) {
+      var hs = m.holders.filter(function (h) { return h.frame_id === f.id && h.x != null; });
+      var x1, x2, y1, y2;
+      if (hs.length) {
+        var ps = hs.map(holdPos);
+        x1 = Math.min.apply(null, ps.map(function (p) { return p.x; })) - FRAME_PAD;
+        x2 = Math.max.apply(null, ps.map(function (p) { return p.x; })) + FRAME_PAD;
+        y1 = Math.min.apply(null, ps.map(function (p) { return p.y; })) - FRAME_PAD;
+        y2 = Math.max.apply(null, ps.map(function (p) { return p.y; })) + FRAME_PAD;
+      } else {
+        x1 = f.x - FRAME_HALF; x2 = f.x + FRAME_HALF;
+        y1 = f.y; y2 = f.base_y != null ? f.base_y : f.y + 2 * FRAME_HALF;
+      }
+      // Подпись Frame — внутри, у нижней границы: прямоугольник охватывает
+      // холдеры и строку подписи.
+      var fw = f.name.length * 6, cx = (x1 + x2) / 2;
+      y2 += 16;
+      x1 = Math.min(x1, cx - fw / 2 - 6);
+      x2 = Math.max(x2, cx + fw / 2 + 6);
+      return { x1: x1, x2: x2, y1: y1, y2: y2, labelY: y2 - 5 };
+    }
+    function ownerName(c) {
+      if (c.device_id) return devices[c.device_id].name;
+      if (c.link_id) return links[c.link_id].name;
+      if (c.frame_id) return frames[c.frame_id].name;
+      return '—';
+    }
+    function compDesc(d) {
+      var nd = m.devices.filter(function (o) { return o.parent_device_id === d.id; }).length;
+      var nl = m.links.filter(function (o) { return o.parent_device_id === d.id; }).length;
+      var nf = m.frames.filter(function (o) { return o.parent_device_id === d.id; }).length;
+      return 'Составной Device: внутренняя схема — устройств: ' + nd + ', линков: ' + nl + ', фреймов: ' + nf + '.';
+    }
+
+    var L = { containers: [], frames: [], links: [], devices: [], ports: [], labels: [], buttons: [] };
+
+    m.devices.forEach(function (d) {
+      if (d.x == null || !isComp(d)) return;
+      var s = devSize(d);
+      L.containers.push({
+        d: d, x: d.x - s.w / 2, y: d.y - s.h / 2, w: s.w, h: s.h,
+        nameY: lerp(d.y - 3, d.y - s.h / 2 + 18, s.t),
+        subY: lerp(d.y + 14, d.y - s.h / 2 + 33, s.t),
+        desc: compDesc(d)
+      });
+      L.buttons.push({ id: d.id, x: d.x + s.w / 2 - 14, y: d.y - s.h / 2 + 14, t: s.t });
+    });
+
+    m.frames.forEach(function (f) {
+      if (f.x == null) return;
+      var op = f.parent_device_id ? fadeInner(tOf(f.parent_device_id)) : 1;
+      if (op < 0.01) return;
+      var gm = frameGeom(f);
+      var hs = m.holders.filter(function (h) { return h.frame_id === f.id; });
+      L.frames.push({
+        f: f, x1: gm.x1, y1: gm.y1, x2: gm.x2, y2: gm.y2, labelY: gm.labelY, opacity: op,
+        inner: !!f.parent_device_id,
+        desc: 'Несущая конструкция: ресурс не передаёт, коннекторов нет. Креплений (Holder): ' + hs.length + '.'
+      });
+    });
+
+    m.links.forEach(function (l) {
+      var pts = m.linkPoints.filter(function (p) { return p.link_id === l.id; });
+      if (!pts.length) return;
+      var op = l.parent_device_id ? fadeInner(tOf(l.parent_device_id)) : 1;
+      if (op < 0.01) return;
+      var adj = {};
+      m.connectors.forEach(function (c) {
+        if (c.link_id === l.id && boundary[c.id]) {
+          var b = boundary[c.id], P = connPos(b.bc), t = tOf(b.cd.id);
+          adj[c.x + ',' + c.y] = {
+            P: P,
+            R: b.inner ? { x: lerp(P.x, b.inner.x, t), y: lerp(P.y, b.inner.y, t) } : null,
+            orig: b.inner ? [{ x: c.x, y: c.y }, { x: b.inner.x, y: b.inner.y }] : null,
+            t: t
+          };
+        }
+      });
+      var lines = {};
+      pts.forEach(function (p) { (lines[p.line_no] = lines[p.line_no] || []).push(p); });
+      var out = [], best = null;
+      Object.keys(lines).forEach(function (k) {
+        var orig = lines[k].map(function (p) { return { x: p.x, y: p.y }; });
+        var arr = orig.map(function (p) { return { x: p.x, y: p.y }; });
+        var ext = null;
+        var a0 = adj[arr[0].x + ',' + arr[0].y];
+        if (a0) { arr[0] = a0.P; if (a0.R) ext = { pts: orthoRoute([a0.P, a0.R], a0.orig), opacity: a0.t }; }
+        var a1 = adj[arr[arr.length - 1].x + ',' + arr[arr.length - 1].y];
+        if (a1) { arr[arr.length - 1] = a1.P; if (a1.R) ext = { pts: orthoRoute([a1.P, a1.R], a1.orig), opacity: a1.t }; }
+        arr = orthoRoute(arr, orig);
+        out.push({ pts: arr, ext: ext });
+        for (var i = 1; i < arr.length; i++) {
+          var dx = arr[i].x - arr[i - 1].x, dy = arr[i].y - arr[i - 1].y;
+          var len = Math.sqrt(dx * dx + dy * dy);
+          if (!best || len > best.len) best = { len: len, x: (arr[i].x + arr[i - 1].x) / 2, y: (arr[i].y + arr[i - 1].y) / 2, dx: dx, dy: dy };
+        }
+      });
+      var label = null;
+      if (best) {
+        var w = l.name.length * 6;
+        var cx1 = null, cx2 = null;
+        if (l.parent_device_id) {
+          var cd = devices[l.parent_device_id], cs2 = devSize(cd);
+          cx1 = cd.x - cs2.w / 2; cx2 = cd.x + cs2.w / 2;
+        }
+        if (Math.abs(best.dx) >= Math.abs(best.dy)) {
+          var y = best.len < 100 ? best.y - (DEV_H / 2 + 8) : best.y - 7;
+          var x = best.x;
+          if (cx1 != null) x = Math.max(cx1 + w / 2 + 4, Math.min(cx2 - w / 2 - 4, x));
+          label = { name: l.name, x: x, y: y, anchor: 'middle', w: w, opacity: op };
+        } else {
+          var anchor = 'start', lx = best.x + 7;
+          if (cx1 != null && lx + w > cx2 - 4) { anchor = 'end'; lx = best.x - 7; }
+          label = { name: l.name, x: lx, y: best.y + 4, anchor: anchor, w: w, opacity: op };
+        }
+      }
+      var cs = m.connectors.filter(function (c) { return c.link_id === l.id; });
+      var res = l.resource_id ? resources[l.resource_id].name : 'не задан';
+      var comp = l.parent_link_id ? ' Входит в состав Link: ' + links[l.parent_link_id].name + '.' : '';
+      if (l.parent_device_id) comp += ' Входит в состав Device: ' + devices[l.parent_device_id].name + '.';
+      var kids = m.links.filter(function (o) { return o.parent_link_id === l.id; });
+      if (kids.length) comp += ' Составной Link, секций: ' + kids.length + '.';
+      L.links.push({
+        l: l, lines: out, label: label, opacity: op,
+        desc: 'Пассивно передаёт ресурс без изменения его вида. Ресурс: ' + res + '. Коннекторов: ' + cs.length + '.' + comp
+      });
+      if (label) L.labels.push(label);
+    });
+
+    m.devices.forEach(function (d) {
+      if (d.x == null || isComp(d)) return;
+      var op = d.parent_device_id ? fadeInner(tOf(d.parent_device_id)) : 1;
+      if (op < 0.01) return;
+      var cs = m.connectors.filter(function (c) { return c.device_id === d.id; });
+      var hs = m.holders.filter(function (h) { return h.device_id === d.id; });
+      var parent = d.parent_device_id ? ' Входит в состав: ' + devices[d.parent_device_id].name + '.' : '';
+      L.devices.push({
+        d: d, x: d.x - DEV_W / 2, y: d.y - DEV_H / 2, opacity: op,
+        desc: 'Преобразует, накапливает, отдаёт или регулирует ресурс. Коннекторов: ' + cs.length + ', креплений: ' + hs.length + '.' + parent
+      });
+    });
+
+    function portGroups(rows, posFn, opFn, kind, pairRows, aKey, bKey) {
+      var groups = {};
+      rows.forEach(function (c) {
+        if (c.x == null) return;
+        var op = opFn(c);
+        if (op < 0.01) return;
+        var p = posFn(c);
+        var key = Math.round(p.x * 10) + ':' + Math.round(p.y * 10);
+        var g = groups[key];
+        if (!g) { g = groups[key] = { x: p.x, y: p.y, opacity: 0, members: [] }; }
+        g.opacity = Math.max(g.opacity, op);
+        g.members.push(c);
+      });
+      Object.keys(groups).forEach(function (key) {
+        var g = groups[key];
+        var names = g.members.map(function (o) { return o.name + ' (' + ownerName(o) + ')'; }).join('; ');
+        var pairs = pairRows.filter(function (p) {
+          return g.members.some(function (o) { return o.id === p[aKey] || o.id === p[bKey]; });
+        }).map(function (p) {
+          var otherId = g.members.some(function (o) { return o.id === p[aKey]; }) ? p[bKey] : p[aKey];
+          var other = connectors[otherId] || holders[otherId];
+          return other ? other.name + ' (' + ownerName(other) + ')' : '—';
+        });
+        var res = g.members[0].resource_id && resources[g.members[0].resource_id] ? ' Ресурс: ' + resources[g.members[0].resource_id].name + '.' : '';
+        L.ports.push({
+          kind: kind, x: g.x, y: g.y, opacity: g.opacity,
+          name: g.members.map(function (o) { return o.name; }).join(' ↔ '),
+          desc: names + '.' + (pairs.length ? ' Связан с: ' + pairs.join('; ') + '.' : '') + res
         });
       });
     }
-    function connVisible(c) {
-      if (hiddenConn[c.id]) return false;
-      if (c.device_id) return devVisible(devices[c.device_id]);
-      return linkVisible(links[c.link_id]);
-    }
-    function holdVisible(h) {
-      if (h.device_id) return devVisible(devices[h.device_id]);
-      if (h.link_id) return linkVisible(links[h.link_id]);
-      return frameVisible(frames[h.frame_id]);
-    }
-    var vConns = m.connectors.filter(connVisible), vHolds = m.holders.filter(holdVisible);
+    portGroups(m.connectors, connPos, connOpacity, 'conn', m.connections, 'connector_a_id', 'connector_b_id');
+    portGroups(m.holders, holdPos, holdOpacity, 'hold', m.bindings, 'holder_a_id', 'holder_b_id');
 
+    return L;
+  }
+
+  function bounds(L) {
     var xs = [], ys = [];
-    vDevices.forEach(function (d) { if (d.x != null) { var w = d.w || DEV_W, h = d.h || DEV_H; xs.push(d.x - w / 2, d.x + w / 2); ys.push(d.y - h / 2, d.y + h / 2); } });
-    vFrames.forEach(function (f) { if (f.x != null) { xs.push(f.x - FRAME_HALF, f.x + FRAME_HALF); ys.push(f.y, f.base_y + 20); } });
-    vLinks.forEach(function (l) { m.linkPoints.forEach(function (p) { if (p.link_id === l.id) { xs.push(p.x); ys.push(p.y); } }); });
-    var minX = Math.min.apply(null, xs) - 30, maxX = Math.max.apply(null, xs) + 30,
-        minY = Math.min.apply(null, ys) - 30, maxY = Math.max.apply(null, ys) + 10;
+    L.containers.forEach(function (c) { xs.push(c.x, c.x + c.w); ys.push(c.y, c.y + c.h); });
+    L.devices.forEach(function (d) { xs.push(d.x, d.x + DEV_W); ys.push(d.y, d.y + DEV_H); });
+    L.frames.forEach(function (f) { xs.push(f.x1, f.x2); ys.push(f.y1, f.labelY + 4); });
+    L.links.forEach(function (l) {
+      l.lines.forEach(function (ln) {
+        ln.pts.forEach(function (p) { xs.push(p.x); ys.push(p.y); });
+        if (ln.ext) ln.ext.pts.forEach(function (p) { xs.push(p.x); ys.push(p.y); });
+      });
+    });
+    L.ports.forEach(function (p) { xs.push(p.x - 8, p.x + 8); ys.push(p.y - 8, p.y + 8); });
+    L.labels.forEach(function (t) {
+      if (t.anchor === 'middle') xs.push(t.x - t.w / 2, t.x + t.w / 2);
+      else if (t.anchor === 'end') xs.push(t.x - t.w, t.x);
+      else xs.push(t.x, t.x + t.w);
+      ys.push(t.y - 11, t.y);
+    });
+    return {
+      x1: Math.min.apply(null, xs) - 30, x2: Math.max.apply(null, xs) + 30,
+      y1: Math.min.apply(null, ys) - 30, y2: Math.max.apply(null, ys) + 10
+    };
+  }
 
-    var svg = el('svg', { viewBox: minX + ' ' + minY + ' ' + (maxX - minX) + ' ' + (maxY - minY), role: 'img', 'aria-label': 'Мнемосхема системы' });
+  function render() {
+    var m = model;
+    document.getElementById('scene').innerHTML = '';
+    var L = buildLayout(anim);
+    var allOnes = {};
+    m.devices.forEach(function (d) {
+      if (m.devices.some(function (o) { return o.parent_device_id === d.id; })) allOnes[d.id] = 1;
+    });
+    var bC = bounds(buildLayout({})), bE = bounds(buildLayout(allOnes));
+    var maxT = 0;
+    Object.keys(anim).forEach(function (k) { maxT = Math.max(maxT, anim[k]); });
+    var vb = {
+      x1: lerp(bC.x1, bE.x1, maxT), x2: lerp(bC.x2, bE.x2, maxT),
+      y1: lerp(bC.y1, bE.y1, maxT), y2: lerp(bC.y2, bE.y2, maxT)
+    };
+    var svg = el('svg', { viewBox: vb.x1 + ' ' + vb.y1 + ' ' + (vb.x2 - vb.x1) + ' ' + (vb.y2 - vb.y1), role: 'img', 'aria-label': 'Мнемосхема системы' });
     document.getElementById('scene').appendChild(svg);
-
-    var groundY = Math.max.apply(null, vFrames.map(function (f) { return f.base_y || 0; }).concat([0]));
-    if (groundY) el('line', { x1: minX + 10, y1: groundY, x2: maxX - 10, y2: groundY, 'class': 'ground' }, svg);
 
     var infoKind = document.getElementById('info-kind'),
         infoName = document.getElementById('info-name'),
         infoDesc = document.getElementById('info-desc');
-
     function select(g, kind, name, desc) {
       svg.querySelectorAll('.el').forEach(function (n) { n.classList.remove('sel'); });
+      svg.querySelectorAll('text.llabel').forEach(function (n) { n.classList.remove('sel'); });
       if (!g) {
         svg.classList.remove('has-sel');
         infoKind.textContent = 'схема';
         infoName.textContent = 'Выберите элемент';
-        infoDesc.textContent = 'Кликните по элементу схемы. Клик по пустому месту или Esc — сброс выделения.';
+        infoDesc.textContent = 'Кликните по элементу схемы. Кнопка «+» на составном Device раскрывает его внутреннюю схему. Клик по пустому месту или Esc — сброс выделения.';
         return;
       }
       g.classList.add('sel');
@@ -193,119 +500,96 @@
       g.setAttribute('class', 'el');
       g.addEventListener('click', function () { select(g, kind, name, desc); });
     }
+    function groupOpacity(g, op) { if (op < 1) g.setAttribute('opacity', op.toFixed(3)); }
 
-    function compDesc(d) {
-      var nd = m.devices.filter(function (o) { return o.parent_device_id === d.id; }).length;
-      var nl = m.links.filter(function (o) { return o.parent_device_id === d.id; }).length;
-      var nf = m.frames.filter(function (o) { return o.parent_device_id === d.id; }).length;
-      return 'Составной Device: внутренняя схема — устройств: ' + nd + ', линков: ' + nl + ', фреймов: ' + nf + '.';
+    function drawFrame(f) {
+      var g = el('g', {}, svg);
+      groupOpacity(g, f.opacity);
+      el('rect', { x: f.x1, y: f.y1, width: f.x2 - f.x1, height: f.y2 - f.y1, rx: 6, 'class': 'frame-rect' }, g);
+      el('rect', { x: f.x1, y: f.y1, width: f.x2 - f.x1, height: f.y2 - f.y1, 'class': 'hit' }, g);
+      txt(g, (f.x1 + f.x2) / 2, f.labelY, f.f.name, 'flabel');
+      clickable(g, 'Frame', f.f.name, f.desc);
     }
+    // Внешние Frame — под контейнерами и Device (просвечивают через заливку),
+    // внутренние Frame составного Device — поверх фона контейнера, под его устройствами.
+    L.frames.forEach(function (f) { if (!f.inner) drawFrame(f); });
 
-    if (expanded) composites.forEach(function (d) {
-      if (d.x == null) return;
-      var w = d.w || DEV_W, h = d.h || DEV_H;
+    L.containers.forEach(function (c) {
       var g = el('g', {}, svg);
-      el('rect', { x: d.x - w / 2, y: d.y - h / 2, width: w, height: h, rx: 4, 'class': 'dev' }, g);
-      txt(g, d.x, d.y - h / 2 + 18, d.name);
-      txt(g, d.x, d.y - h / 2 + 33, 'Device (составной)', 'sub');
-      el('rect', { x: d.x - w / 2, y: d.y - h / 2, width: w, height: h, 'class': 'hit' }, g);
-      clickable(g, 'Device', d.name, compDesc(d));
+      el('rect', { x: c.x, y: c.y, width: c.w, height: c.h, rx: 4, 'class': 'dev' }, g);
+      txt(g, c.d.x, c.nameY, c.d.name, 'dlabel');
+      txt(g, c.d.x, c.subY, 'Device (составной)', 'sub dlabel');
+      el('rect', { x: c.x, y: c.y, width: c.w, height: c.h, 'class': 'hit' }, g);
+      clickable(g, 'Device', c.d.name, 'Преобразует, накапливает, отдаёт или регулирует ресурс. ' + c.desc);
     });
 
-    vFrames.forEach(function (f) {
-      if (f.x == null) return;
-      var g = el('g', {}, svg);
-      el('polygon', { points: f.x + ',' + f.y + ' ' + (f.x - FRAME_HALF) + ',' + f.base_y + ' ' + (f.x + FRAME_HALF) + ',' + f.base_y, 'class': 'frame' }, g);
-      txt(g, f.x, f.base_y + 18, f.name, 'flabel');
-      el('polygon', { points: f.x + ',' + (f.y - 10) + ' ' + (f.x - FRAME_HALF - 10) + ',' + (f.base_y + 5) + ' ' + (f.x + FRAME_HALF + 10) + ',' + (f.base_y + 5), 'class': 'hit' }, g);
-      var hs = m.holders.filter(function (h) { return h.frame_id === f.id; });
-      clickable(g, 'Frame', f.name, 'Несущая конструкция: ресурс не передаёт, коннекторов нет. Креплений (Holder): ' + hs.length + '.');
-    });
+    L.frames.forEach(function (f) { if (f.inner) drawFrame(f); });
 
-    vLinks.forEach(function (l) {
-      var pts = m.linkPoints.filter(function (p) { return p.link_id === l.id; });
-      if (!pts.length) return;
+    L.links.forEach(function (l) {
       var g = el('g', {}, svg);
-      var lines = {};
-      pts.forEach(function (p) { (lines[p.line_no] = lines[p.line_no] || []).push(p); });
-      Object.keys(lines).forEach(function (k) {
-        var arr = lines[k].slice();
-        var first = arr[0], last = arr[arr.length - 1];
-        var e1 = extMap[l.id + '|' + first.x + ',' + first.y];
-        if (e1) arr.unshift(e1);
-        var e2 = extMap[l.id + '|' + last.x + ',' + last.y];
-        if (e2) arr.push(e2);
-        var str = arr.map(function (p) { return p.x + ',' + p.y; }).join(' ');
+      groupOpacity(g, l.opacity);
+      l.lines.forEach(function (ln) {
+        var str = ln.pts.map(function (p) { return p.x + ',' + p.y; }).join(' ');
         el('polyline', { points: str, 'class': 'link' }, g);
         el('polyline', { points: str, 'class': 'hit' }, g);
-      });
-      var cs = m.connectors.filter(function (c) { return c.link_id === l.id; });
-      var res = l.resource_id ? resources[l.resource_id].name : 'не задан';
-      var kids = m.links.filter(function (o) { return o.parent_link_id === l.id; });
-      var comp = l.parent_link_id ? ' Входит в состав Link: ' + links[l.parent_link_id].name + '.' : '';
-      if (kids.length) comp += ' Составной Link, секций: ' + kids.length + '.';
-      clickable(g, 'Link', l.name, 'Пассивно передаёт ресурс без изменения его вида. Ресурс: ' + res + '. Коннекторов: ' + cs.length + '.' + comp);
-    });
-
-    vDevices.forEach(function (d) {
-      if (d.x == null) return;
-      if (expanded && composites.indexOf(d) >= 0) return;
-      var w = d.w || DEV_W, h = d.h || DEV_H;
-      var isComp = composites.indexOf(d) >= 0;
-      var g = el('g', {}, svg);
-      el('rect', { x: d.x - w / 2, y: d.y - h / 2, width: w, height: h, rx: 4, 'class': 'dev' }, g);
-      txt(g, d.x, d.y - 3, d.name);
-      txt(g, d.x, d.y + 14, isComp ? 'Device (составной)' : 'Device', 'sub');
-      var cs = m.connectors.filter(function (c) { return c.device_id === d.id; });
-      var hs = m.holders.filter(function (h) { return h.device_id === d.id; });
-      var parent = d.parent_device_id ? ' Входит в состав: ' + devices[d.parent_device_id].name + '.' : '';
-      var desc = 'Преобразует, накапливает, отдаёт или регулирует ресурс. Коннекторов: ' + cs.length + ', креплений: ' + hs.length + '.' + parent;
-      if (isComp) desc += ' ' + compDesc(d);
-      clickable(g, 'Device', d.name, desc);
-    });
-
-    function ownerName(c) {
-      if (c.device_id) return devices[c.device_id].name;
-      if (c.link_id) return links[c.link_id].name;
-      if (c.frame_id) return frames[c.frame_id].name;
-      return '—';
-    }
-    function drawPorts(rows, cls, kind, r, pairRows, aKey, bKey, otherMap) {
-      var seen = {};
-      rows.forEach(function (c) {
-        if (c.x == null) return;
-        var key = c.x + ':' + c.y;
-        var same = rows.filter(function (o) { return o.x === c.x && o.y === c.y; });
-        var g = seen[key];
-        if (!g) {
-          g = el('g', {}, svg);
-          el('circle', { cx: c.x, cy: c.y, r: r, 'class': cls }, g);
-          el('circle', { cx: c.x, cy: c.y, r: 16, 'class': 'hit' }, g);
-          seen[key] = g;
-          var names = same.map(function (o) { return o.name + ' (' + ownerName(o) + ')'; }).join('; ');
-          var pairs = pairRows.filter(function (p) {
-            return same.some(function (o) { return o.id === p[aKey] || o.id === p[bKey]; });
-          }).map(function (p) {
-            var otherId = same.some(function (o) { return o.id === p[aKey]; }) ? p[bKey] : p[aKey];
-            var other = otherMap[otherId];
-            return other ? other.name + ' (' + ownerName(other) + ')' : '—';
-          });
-          var res = c.resource_id && resources[c.resource_id] ? ' Ресурс: ' + resources[c.resource_id].name + '.' : '';
-          var desc = names + '.' + (pairs.length ? ' Связан с: ' + pairs.join('; ') + '.' : '') + res;
-          clickable(g, kind, same.map(function (o) { return o.name; }).join(' ↔ '), desc);
+        if (ln.ext && ln.ext.opacity > 0.01) {
+          var es = ln.ext.pts.map(function (p) { return p.x + ',' + p.y; }).join(' ');
+          var eg = el('g', { opacity: ln.ext.opacity.toFixed(3) }, g);
+          el('polyline', { points: es, 'class': 'link' }, eg);
         }
       });
-    }
-    drawPorts(vConns, 'conn', 'Connector', 6, m.connections, 'connector_a_id', 'connector_b_id', connectors);
-    drawPorts(vHolds, 'hold', 'Holder', 7, m.bindings, 'holder_a_id', 'holder_b_id', holders);
+      g.setAttribute('class', 'el');
+      g.addEventListener('click', function () {
+        select(g, 'Link', l.l.name, l.desc);
+        if (l.label && l.label.node) l.label.node.classList.add('sel');
+      });
+      if (l.label) { l.label.group = g; l.label.desc = l.desc; }
+    });
+
+    L.devices.forEach(function (d) {
+      var g = el('g', {}, svg);
+      groupOpacity(g, d.opacity);
+      el('rect', { x: d.x, y: d.y, width: DEV_W, height: DEV_H, rx: 4, 'class': 'dev' }, g);
+      txt(g, d.d.x, d.d.y - 3, d.d.name, 'dlabel');
+      txt(g, d.d.x, d.d.y + 14, 'Device', 'sub dlabel');
+      clickable(g, 'Device', d.d.name, d.desc);
+    });
+
+    L.ports.forEach(function (p) {
+      var g = el('g', {}, svg);
+      groupOpacity(g, p.opacity);
+      var r = p.kind === 'conn' ? 6 : 7;
+      el('circle', { cx: p.x, cy: p.y, r: r, 'class': p.kind }, g);
+      el('circle', { cx: p.x, cy: p.y, r: 16, 'class': 'hit' }, g);
+      clickable(g, p.kind === 'conn' ? 'Connector' : 'Holder', p.name, p.desc);
+    });
+
+    L.labels.forEach(function (t) {
+      var n = txt(svg, t.x, t.y, t.name, 'llabel');
+      n.setAttribute('text-anchor', t.anchor);
+      if (t.opacity < 1) n.setAttribute('opacity', t.opacity.toFixed(3));
+      t.node = n;
+      if (t.group) n.addEventListener('click', function (e) {
+        e.stopPropagation();
+        select(t.group, 'Link', t.name, t.desc);
+        n.classList.add('sel');
+      });
+    });
+
+    L.buttons.forEach(function (b) {
+      var g = el('g', { 'class': 'xbtn' }, svg);
+      el('rect', { x: b.x - 8, y: b.y - 8, width: 16, height: 16, rx: 3 }, g);
+      el('line', { x1: b.x - 4, y1: b.y, x2: b.x + 4, y2: b.y }, g);
+      if (b.t < 0.5) el('line', { x1: b.x, y1: b.y - 4, x2: b.x, y2: b.y + 4 }, g);
+      var title = el('title', {}, g);
+      title.textContent = b.t < 0.5 ? 'Развернуть внутреннюю схему' : 'Свернуть внутреннюю схему';
+      g.addEventListener('click', function (e) { e.stopPropagation(); toggle(b.id); });
+    });
 
     svg.addEventListener('click', function (e) {
       if (!e.target.closest('.el')) select(null);
     });
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') select(null);
-    });
-
+    deselect = function () { select(null); };
     select(null);
   }
 })();
