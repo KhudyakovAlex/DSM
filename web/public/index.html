@@ -28,15 +28,17 @@
   .topbar { display: flex; align-items: center; justify-content: space-between;
             gap: 12px; margin: 0 0 10px; }
   h1 { font-size: 14px; font-weight: 500; margin: 0; }
-  #scene { flex: 1; min-height: 0; border-radius: 8px; overflow: auto; }
+  #scene { flex: 1; min-height: 0; border-radius: 8px; overflow: auto; cursor: grab; }
   svg { display: block; touch-action: none; }
   body.editing g[data-dev] { cursor: grab; }
   body.editing g[data-frame] { cursor: grab; }
-  body.editing #scene { background-image:
-      linear-gradient(var(--grid) 1px, transparent 1px),
-      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-      background-size: 24px 24px; }
+  #scene.panning { cursor: grabbing; }
+  .gridbg { display: none; }
+  body.editing .gridbg { display: block; }
   .tools { display: flex; align-items: center; gap: 6px; }
+  #grid-step { width: 56px; height: 30px; padding: 0 6px; color: var(--fg);
+               background: var(--card); border: 1px solid var(--border);
+               border-radius: 6px; font: inherit; font-size: 12px; }
   #edit-btn, .zbtn { display: inline-flex; align-items: center; justify-content: center;
               width: 30px; height: 30px; padding: 0; color: var(--fg);
               background: var(--card); border: 1px solid var(--border);
@@ -59,6 +61,11 @@
   polyline.hit { fill: none; stroke: transparent; stroke-width: 16; pointer-events: stroke; }
   .el { cursor: pointer; }
   .xbtn { cursor: pointer; }
+  .rsz { display: none; fill: var(--accent); stroke: var(--bg); stroke-width: 1; cursor: nwse-resize; }
+  body.editing .rsz { display: block; }
+  .lseg { stroke: transparent; stroke-width: 12; fill: none; pointer-events: stroke; }
+  body.editing .lseg.h { cursor: row-resize; }
+  body.editing .lseg.v { cursor: col-resize; }
   .xbtn rect { fill: var(--card); stroke: var(--dev); stroke-width: 1.5; }
   .xbtn line { stroke: var(--dev); stroke-width: 1.5; }
   svg.has-sel .el { opacity: .3; }
@@ -77,6 +84,7 @@
 <div class="topbar">
   <h1>DSM — мнемосхема системы (данные из PostgreSQL)</h1>
   <div class="tools">
+    <input id="grid-step" type="number" min="5" max="200" step="5" value="20" title="Шаг сетки (единицы модели)" aria-label="Шаг сетки">
     <button class="zbtn" id="zoom-out" type="button" title="Уменьшить масштаб" aria-label="Уменьшить масштаб">−</button>
     <button class="zbtn" id="zoom-in" type="button" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button>
     <button id="edit-btn" type="button" title="Редактировать схему" aria-label="Редактировать схему">
@@ -180,21 +188,41 @@
   // Фиксированный масштаб: 1 единица модели = zoom px; авто-подгонки под
   // контейнер нет, выход за край даёт прокрутку, зум — только кнопками.
   var zoom = 1;
-  var lastVb = null;
+  var gridStep = 20;
+  var segRoutes = {};
+  // Мировое поле фиксировано при загрузке: содержимое плюс большие пустые
+  // поля — холст панорамируется и не переякоривается при перерисовке.
+  var world = null, centered = false;
 
-  function setZoom(z) {
+  function setZoom(z, px, py) {
     var nz = Math.min(4, Math.max(0.25, z));
     var scene = document.getElementById('scene');
-    var cx = scene.scrollLeft + scene.clientWidth / 2;
-    var cy = scene.scrollTop + scene.clientHeight / 2;
+    if (px == null) px = scene.clientWidth / 2;
+    if (py == null) py = scene.clientHeight / 2;
+    var cx = scene.scrollLeft + px;
+    var cy = scene.scrollTop + py;
     var k = nz / zoom;
     zoom = nz;
     if (model) render();
-    scene.scrollLeft = cx * k - scene.clientWidth / 2;
-    scene.scrollTop = cy * k - scene.clientHeight / 2;
+    scene.scrollLeft = cx * k - px;
+    scene.scrollTop = cy * k - py;
   }
   document.getElementById('zoom-in').addEventListener('click', function () { setZoom(zoom * 1.25); });
   document.getElementById('zoom-out').addEventListener('click', function () { setZoom(zoom / 1.25); });
+  // Ctrl + колесо: зум в точку курсора и из неё; без Ctrl — обычная прокрутка.
+  document.getElementById('scene').addEventListener('wheel', function (e) {
+    if (!e.ctrlKey || !model) return;
+    e.preventDefault();
+    var r = this.getBoundingClientRect();
+    setZoom(zoom * Math.exp(-e.deltaY * 0.002), e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+  document.getElementById('grid-step').addEventListener('change', function () {
+    var v = Number(this.value);
+    if (!isFinite(v)) return;
+    gridStep = Math.min(200, Math.max(5, v));
+    this.value = gridStep;
+    if (model) render();
+  });
 
   document.getElementById('edit-btn').addEventListener('click', function () {
     editMode = !editMode;
@@ -230,7 +258,7 @@
   // Крепления линка остаются на трассе после её перестройки.
   function devSizeM(d) {
     var comp = model.devices.some(function (o) { return o.parent_device_id === d.id; });
-    if (!comp) return { w: DEV_W, h: DEV_H };
+    if (!comp) return { w: d.w || DEV_W, h: d.h || DEV_H };
     var t = anim[d.id] || 0;
     return { w: lerp(DEV_W, d.w || DEV_W, t), h: lerp(DEV_H, d.h || DEV_H, t) };
   }
@@ -288,9 +316,10 @@
   }
   // Контакт слитно: коннектор линка, парный смещённому коннектору Device,
   // едет следом вместе с концом трассы своего линка.
-  function cascadeContacts(moved, dx, dy, touched) {
+  function cascadeContacts(moved, deltas, touched) {
     var m = model, byIdC = byId(m.connectors);
     for (var i = 0; i < moved.length; i++) {
+      var dd = deltas[moved[i]] || { dx: 0, dy: 0 };
       m.connections.forEach(function (p) {
         var other = p.connector_a_id === moved[i] ? p.connector_b_id :
                     p.connector_b_id === moved[i] ? p.connector_a_id : null;
@@ -300,9 +329,22 @@
         var ox = c.x, oy = c.y;
         var oldPts = m.linkPoints.filter(function (pt) { return pt.link_id === c.link_id; })
           .map(function (pt) { return { line_no: pt.line_no, ord: pt.ord, x: pt.x, y: pt.y }; });
-        c.x += dx; c.y += dy;
-        m.linkPoints.forEach(function (pt) {
-          if (pt.link_id === c.link_id && pt.x === ox && pt.y === oy) { pt.x += dx; pt.y += dy; }
+        c.x += dd.dx; c.y += dd.dy;
+        // конец трассы и соседняя вершина (угол у грани / конец защитного
+        // отхода) едут вместе с коннектором, иначе отход отрывается от контакта
+        var lines = {};
+        m.linkPoints.forEach(function (pt) { if (pt.link_id === c.link_id) (lines[pt.line_no] = lines[pt.line_no] || []).push(pt); });
+        Object.keys(lines).forEach(function (k) {
+          var arr = lines[k].sort(function (a, b) { return a.ord - b.ord; });
+          var n = arr.length;
+          if (n && arr[0].x === ox && arr[0].y === oy) {
+            arr[0].x += dd.dx; arr[0].y += dd.dy;
+            if (n > 2) { arr[1].x += dd.dx; arr[1].y += dd.dy; }
+          }
+          if (n && arr[n - 1].x === ox && arr[n - 1].y === oy) {
+            arr[n - 1].x += dd.dx; arr[n - 1].y += dd.dy;
+            if (n > 2) { arr[n - 2].x += dd.dx; arr[n - 2].y += dd.dy; }
+          }
         });
         // Крепление на сегменте трассы, примыкающем к смещённому концу, едет следом.
         var ls = {};
@@ -321,11 +363,12 @@
               var a = r[j - 1], b = r[j];
               var onExitLine = horiz ? (a.y === oy && b.y === oy) : (a.x === ox && b.x === ox);
               if (!onExitLine) continue;
-              if (distSeg(h, a, b) < 0.5) { h.x += dx; h.y += dy; }
+              if (distSeg(h, a, b) < 0.5) { h.x += dd.dx; h.y += dd.dy; }
             }
           });
         });
         touched[c.link_id] = true;
+        deltas[other] = dd;
         moved.push(other);
       });
     }
@@ -335,9 +378,10 @@
     render();
   }
   function moveDevice(id, dx, dy) {
-    var moved = [], touched = {};
+    var moved = [], touched = {}, deltas = {};
     moveDeviceCore(id, dx, dy, moved);
-    cascadeContacts(moved, dx, dy, touched);
+    moved.forEach(function (cid) { deltas[cid] = { dx: dx, dy: dy }; });
+    cascadeContacts(moved, deltas, touched);
     finishMove(touched);
   }
   // Перемещение Frame: вместе с ним едет всё закреплённое на нём —
@@ -359,20 +403,155 @@
       if (h.device_id) moveDeviceCore(h.device_id, dx, dy, moved);
       else { moveLink(byId(m.links)[h.link_id], dx, dy, moved); touched[h.link_id] = true; }
     });
-    cascadeContacts(moved, dx, dy, touched);
+    cascadeContacts(moved, (function () {
+      var dmap = {};
+      moved.forEach(function (cid) { dmap[cid] = { dx: dx, dy: dy }; });
+      return dmap;
+    })(), touched);
     finishMove(touched);
   }
 
-  document.getElementById('scene').addEventListener('pointerdown', function (e) {
-    if (!model || !editMode || e.target.closest('.xbtn')) return;
-    var g = e.target.closest('g[data-dev]');
-    if (g) {
-      drag = { kind: 'dev', id: +g.getAttribute('data-dev'), cx: e.clientX, cy: e.clientY };
-    } else {
-      var fg = e.target.closest('g[data-frame]');
-      if (!fg) return;
-      drag = { kind: 'frame', id: +fg.getAttribute('data-frame'), cx: e.clientX, cy: e.clientY };
+  // Ресайз за ПНУ: якорь — ЛПУ, габарит пишется в d.w/d.h (память сессии);
+  // порты и крепления масштабируются пропорционально от старого центра.
+  function startResize(id, cx, cy) {
+    var d = byId(model.devices)[id];
+    var old = { w: d.w || DEV_W, h: d.h || DEV_H };
+    var oldC = { x: d.x, y: d.y };
+    return {
+      kind: 'resize', id: id, cx: cx, cy: cy,
+      tl: { x: d.x - old.w / 2, y: d.y - old.h / 2 }, old: old,
+      ports: model.connectors.filter(function (c) { return c.device_id === id; })
+        .map(function (c) { return { id: c.id, ox: c.x - oldC.x, oy: c.y - oldC.y }; }),
+      holds: model.holders.filter(function (h) { return h.device_id === id; })
+        .map(function (h) { return { id: h.id, ox: h.x - oldC.x, oy: h.y - oldC.y }; })
+    };
+  }
+  function resizeTo(drag, wx, wy) {
+    var d = byId(model.devices)[drag.id];
+    var nw = Math.max(40, Math.round(wx / gridStep) * gridStep - drag.tl.x);
+    var nh = Math.max(30, Math.round(wy / gridStep) * gridStep - drag.tl.y);
+    var sx = nw / drag.old.w, sy = nh / drag.old.h;
+    var nc = { x: drag.tl.x + nw / 2, y: drag.tl.y + nh / 2 };
+    d.w = nw; d.h = nh; d.x = nc.x; d.y = nc.y;
+    var moved = [], deltas = {}, touched = {};
+    var byIdC = byId(model.connectors), byIdH = byId(model.holders);
+    drag.ports.forEach(function (p) {
+      var c = byIdC[p.id], nx = nc.x + p.ox * sx, ny = nc.y + p.oy * sy;
+      deltas[p.id] = { dx: nx - c.x, dy: ny - c.y };
+      c.x = nx; c.y = ny; moved.push(p.id);
+    });
+    drag.holds.forEach(function (p) {
+      var h = byIdH[p.id]; h.x = nc.x + p.ox * sx; h.y = nc.y + p.oy * sy;
+    });
+    cascadeContacts(moved, deltas, touched);
+    finishMove(touched);
+  }
+
+  // Сдвиг сегмента трассы перпендикулярно его ориентации: горизонтальный —
+  // по вертикали, вертикальный — по горизонтали. Концы-разъёмы (первый и
+  // последний stored узел) не двигаются; защитный перпендикулярный отход
+  // у разъёма всегда восстанавливает orthoRoute. Углы остаются прямыми.
+  function segJ(pts, horiz, span) {
+    var ax = horiz ? 'x' : 'y';
+    for (var k = 1; k < pts.length - 2; k++) {
+      var P = pts[k], Q = pts[k + 1];
+      if ((horiz ? P.y === Q.y : P.x === Q.x) &&
+          Math.min(P[ax], Q[ax]) === span[0] && Math.max(P[ax], Q[ax]) === span[1]) return k;
     }
+    return -1;
+  }
+  function moveSeg(drag, delta) {
+    var pts = segRoutes[drag.link + ':' + drag.line];
+    if (!pts) return;
+    var j = segJ(pts, drag.horiz, drag.span);
+    if (j < 0) return;
+    var key = drag.horiz ? 'y' : 'x';
+    var last = pts.length - 1;
+    var touchA = (j === 1), touchB = (j + 1 === last - 1);
+    // Отход на той же оси, что и сегмент, поперёк не сдвинуть: он обязан
+    // выходить из разъёма перпендикулярно грани — сегмент остановлен.
+    if (touchA && (pts[1].y === pts[0].y) === drag.horiz) return;
+    if (touchB && (pts[last].y === pts[last - 1].y) === drag.horiz) return;
+    var nv = Math.round((drag.base0 + delta) / gridStep) * gridStep;
+    // Дальше соседнего угла перегиба сегмент не едет: иначе примыкающий
+    // сегмент разворачивается назад и даёт излом. Стык с отходом скользит
+    // по оси отхода, защитный кусок не короче STUB.
+    var v = pts[j][key], lo = -Infinity, hi = Infinity, STUB = 25;
+    function side(c, s) { if (s === 'lo') lo = Math.max(lo, c); else hi = Math.min(hi, c); }
+    function sym(c) { if (c < v) side(c, 'lo'); else if (c > v) side(c, 'hi'); else { side(c, 'lo'); side(c, 'hi'); } }
+    if (touchA) side(pts[0][key] + (pts[1][key] >= pts[0][key] ? STUB : -STUB), pts[1][key] >= pts[0][key] ? 'lo' : 'hi');
+    else if (j - 1 >= 0) sym(pts[j - 1][key]);
+    if (touchB) side(pts[last][key] + (pts[last - 1][key] <= pts[last][key] ? -STUB : STUB), pts[last - 1][key] <= pts[last][key] ? 'hi' : 'lo');
+    else if (j + 2 <= last) sym(pts[j + 2][key]);
+    nv = Math.max(lo, Math.min(hi, nv));
+    if (nv === v) return;
+    var np = pts.map(function (p) { return { x: p.x, y: p.y }; });
+    np[touchA ? 1 : j][key] = nv;
+    np[touchB ? last - 1 : j + 1][key] = nv;
+    // храним все вершины отрисованной трассы: концы защитных отходов остаются
+    // на нормали грани, иначе orthoRoute вернёт их на ось и сотрёт изгиб
+    var stored = np;
+    model.linkPoints = model.linkPoints.filter(function (p) {
+      return !(p.link_id === drag.link && p.line_no === drag.line);
+    });
+    stored.forEach(function (p, idx) {
+      model.linkPoints.push({ link_id: drag.link, line_no: drag.line, ord: idx + 1, x: p.x, y: p.y });
+    });
+    snapLinkHolders(drag.link);
+    render();
+  }
+
+  document.getElementById('scene').addEventListener('pointerdown', function (e) {
+    if (!model || e.target.closest('.xbtn')) return;
+    var rz = editMode && e.target.closest('.rsz');
+    if (rz) {
+      drag = startResize(+rz.getAttribute('data-rsz'), e.clientX, e.clientY);
+      dragMoved = false;
+      e.preventDefault();
+      return;
+    }
+    var ls = editMode && e.target.closest('.lseg');
+    if (ls) {
+      // контейнер составного Device рисуется под трассами: клик по его телу
+      // двигает контейнер, а не сегмент линка, лежащий поверх
+      var sv0 = document.querySelector('#scene svg');
+      var cm0 = sv0.getScreenCTM();
+      var wx = (e.clientX - cm0.e) / cm0.a, wy = (e.clientY - cm0.f) / cm0.d;
+      var cid = null;
+      model.devices.forEach(function (d) {
+        if (d.x == null || !isComp(d)) return;
+        var s = devSizeM(d);
+        if (wx >= d.x - s.w / 2 && wx <= d.x + s.w / 2 && wy >= d.y - s.h / 2 && wy <= d.y + s.h / 2) cid = d.id;
+      });
+      if (cid != null) {
+        drag = { kind: 'dev', id: cid, cx: e.clientX, cy: e.clientY };
+        dragMoved = false;
+        e.preventDefault();
+        return;
+      }
+      var lk = +ls.getAttribute('data-link'), lno = +ls.getAttribute('data-line');
+      var hz = ls.getAttribute('data-h') === '1';
+      var sp = ls.getAttribute('data-span').split(',').map(Number);
+      var rp = segRoutes[lk + ':' + lno] || [];
+      var jj = segJ(rp, hz, sp);
+      drag = { kind: 'seg', link: lk, line: lno, horiz: hz, span: sp,
+        base0: jj >= 0 ? rp[jj][hz ? 'y' : 'x'] : 0, cx: e.clientX, cy: e.clientY };
+      dragMoved = false;
+      e.preventDefault();
+      return;
+    }
+    var g = editMode && e.target.closest('g[data-dev]');
+    var fg = !g && editMode && e.target.closest('g[data-frame]');
+    // захват за кружок порта/крепления двигает его владельца, а не игнорируется
+    var pg = !g && !fg && editMode && e.target.closest('g[data-pdev]');
+    var pf = !g && !fg && !pg && editMode && e.target.closest('g[data-pframe]');
+    if (g || pg) {
+      drag = { kind: 'dev', id: +(g || pg).getAttribute(g ? 'data-dev' : 'data-pdev'), cx: e.clientX, cy: e.clientY };
+    } else if (fg || pf) {
+      drag = { kind: 'frame', id: +(fg || pf).getAttribute(fg ? 'data-frame' : 'data-pframe'), cx: e.clientX, cy: e.clientY };
+    } else if (!e.target.closest('.el')) {
+      drag = { kind: 'pan', cx: e.clientX, cy: e.clientY };
+    } else return;
     dragMoved = false;
     e.preventDefault();
   });
@@ -380,16 +559,50 @@
     if (!drag) return;
     if (!dragMoved && Math.abs(e.clientX - drag.cx) < 3 && Math.abs(e.clientY - drag.cy) < 3) return;
     dragMoved = true;
+    if (drag.kind === 'pan') {
+      var sc = document.getElementById('scene');
+      sc.classList.add('panning');
+      sc.scrollLeft -= e.clientX - drag.cx;
+      sc.scrollTop -= e.clientY - drag.cy;
+      drag.cx = e.clientX; drag.cy = e.clientY;
+      return;
+    }
+    if (drag.kind === 'resize') {
+      var sv = document.querySelector('#scene svg');
+      var cm = sv.getScreenCTM();
+      resizeTo(drag, (e.clientX - cm.e) / cm.a, (e.clientY - cm.f) / cm.d);
+      drag.cx = e.clientX; drag.cy = e.clientY;
+      return;
+    }
+    if (drag.kind === 'seg') {
+      var sv2 = document.querySelector('#scene svg');
+      var cm2 = sv2.getScreenCTM();
+      var d = drag.horiz ? (e.clientY - drag.cy) / cm2.d : (e.clientX - drag.cx) / cm2.a;
+      moveSeg(drag, d);
+      return;
+    }
     var svg = document.querySelector('#scene svg');
-    // Только масштаб текущей CTM: viewBox сам едет за перетаскиваемым
-    // Device, поэтому пересчёт якоря через полную матрицу даёт обратную связь.
+    // Масштаб фиксирован (zoom), поэтому px → единицы модели делением на ctm.a/d.
     var ctm = svg.getScreenCTM();
     var dx = (e.clientX - drag.cx) / ctm.a, dy = (e.clientY - drag.cy) / ctm.d;
     drag.cx = e.clientX; drag.cy = e.clientY;
-    if (drag.kind === 'frame') moveFrame(drag.id, dx, dy);
-    else moveDevice(drag.id, dx, dy);
+    // Магнит к сетке: у Device снапится левый верхний угол, у Frame — вершина.
+    if (drag.kind === 'frame') {
+      var f = byId(model.frames)[drag.id];
+      dx = Math.round((f.x + dx) / gridStep) * gridStep - f.x;
+      dy = Math.round((f.y + dy) / gridStep) * gridStep - f.y;
+      moveFrame(drag.id, dx, dy);
+    } else {
+      var d = byId(model.devices)[drag.id], s = devSizeM(d);
+      dx = Math.round((d.x + dx - s.w / 2) / gridStep) * gridStep + s.w / 2 - d.x;
+      dy = Math.round((d.y + dy - s.h / 2) / gridStep) * gridStep + s.h / 2 - d.y;
+      moveDevice(drag.id, dx, dy);
+    }
   });
-  document.addEventListener('pointerup', function () { drag = null; });
+  document.addEventListener('pointerup', function () {
+    drag = null;
+    document.getElementById('scene').classList.remove('panning');
+  });
   document.getElementById('scene').addEventListener('click', function (e) {
     if (dragMoved) { e.stopPropagation(); dragMoved = false; }
   }, true);
@@ -429,7 +642,7 @@
     function tOf(id) { return tMap[id] || 0; }
     function isComp(d) { return !!compIds[d.id]; }
     function devSize(d) {
-      if (!isComp(d)) return { w: DEV_W, h: DEV_H, t: 0 };
+      if (!isComp(d)) return { w: d.w || DEV_W, h: d.h || DEV_H, t: 0 };
       var t = tOf(d.id);
       return { w: lerp(DEV_W, d.w || DEV_W, t), h: lerp(DEV_H, d.h || DEV_H, t), t: t };
     }
@@ -557,7 +770,7 @@
       if (d.x == null || !isComp(d)) return;
       var s = devSize(d);
       L.containers.push({
-        d: d, x: d.x - s.w / 2, y: d.y - s.h / 2, w: s.w, h: s.h,
+        d: d, x: d.x - s.w / 2, y: d.y - s.h / 2, w: s.w, h: s.h, t: s.t,
         nameY: lerp(d.y - 3, d.y - s.h / 2 + 18, s.t),
         subY: lerp(d.y + 14, d.y - s.h / 2 + 33, s.t),
         desc: compDesc(d)
@@ -613,7 +826,7 @@
         } else {
           arr = orthoRoute(arr, orig);
         }
-        out.push({ pts: arr, ext: ext });
+        out.push({ pts: arr, ext: ext, line_no: +k });
         for (var i = 1; i < arr.length; i++) {
           var dx = arr[i].x - arr[i - 1].x, dy = arr[i].y - arr[i - 1].y;
           var len = Math.sqrt(dx * dx + dy * dy);
@@ -659,8 +872,9 @@
       var cs = m.connectors.filter(function (c) { return c.device_id === d.id; });
       var hs = m.holders.filter(function (h) { return h.device_id === d.id; });
       var parent = d.parent_device_id ? ' Входит в состав: ' + devices[d.parent_device_id].name + '.' : '';
+      var s = devSize(d);
       L.devices.push({
-        d: d, x: d.x - DEV_W / 2, y: d.y - DEV_H / 2, opacity: op,
+        d: d, x: d.x - s.w / 2, y: d.y - s.h / 2, w: s.w, h: s.h, opacity: op,
         desc: 'Преобразует, накапливает, отдаёт или регулирует ресурс. Коннекторов: ' + cs.length + ', креплений: ' + hs.length + '.' + parent
       });
     });
@@ -689,8 +903,11 @@
           return other ? other.name + ' (' + ownerName(other) + ')' : '—';
         });
         var res = g.members[0].resource_id && resources[g.members[0].resource_id] ? ' Ресурс: ' + resources[g.members[0].resource_id].name + '.' : '';
+        var od = null, of = null;
+        g.members.forEach(function (o) { if (o.device_id) od = o.device_id; if (o.frame_id) of = o.frame_id; });
         L.ports.push({
           kind: kind, x: g.x, y: g.y, opacity: g.opacity,
+          pdev: od, pframe: od ? null : of,
           name: g.members.map(function (o) { return o.name; }).join(' ↔ '),
           desc: names + '.' + (pairs.length ? ' Связан с: ' + pairs.join('; ') + '.' : '') + res
         });
@@ -719,7 +936,7 @@
   function bounds(L) {
     var xs = [], ys = [];
     L.containers.forEach(function (c) { xs.push(c.x, c.x + c.w); ys.push(c.y, c.y + c.h); });
-    L.devices.forEach(function (d) { xs.push(d.x, d.x + DEV_W); ys.push(d.y, d.y + DEV_H); });
+    L.devices.forEach(function (d) { xs.push(d.x, d.x + d.w); ys.push(d.y, d.y + d.h); });
     L.frames.forEach(function (f) { xs.push(f.x1, f.x2); ys.push(f.y1, f.labelY + 4); });
     L.links.forEach(function (l) {
       l.lines.forEach(function (ln) {
@@ -744,6 +961,7 @@
     var m = model;
     var scene = document.getElementById('scene');
     scene.innerHTML = '';
+    segRoutes = {};
     var L = buildLayout(anim);
     var allOnes = {};
     m.devices.forEach(function (d) {
@@ -756,19 +974,26 @@
       x1: lerp(bC.x1, bE.x1, maxT), x2: lerp(bC.x2, bE.x2, maxT),
       y1: lerp(bC.y1, bE.y1, maxT), y2: lerp(bC.y2, bE.y2, maxT)
     };
+    if (!world) {
+      var M = 1000;
+      world = { x1: vb.x1 - M, y1: vb.y1 - M, x2: vb.x2 + M, y2: vb.y2 + M };
+    }
+    var ww = world.x2 - world.x1, wh = world.y2 - world.y1;
     var svg = el('svg', {
-      viewBox: vb.x1 + ' ' + vb.y1 + ' ' + (vb.x2 - vb.x1) + ' ' + (vb.y2 - vb.y1),
-      width: (vb.x2 - vb.x1) * zoom, height: (vb.y2 - vb.y1) * zoom,
+      viewBox: world.x1 + ' ' + world.y1 + ' ' + ww + ' ' + wh,
+      width: ww * zoom, height: wh * zoom,
       role: 'img', 'aria-label': 'Мнемосхема системы'
     });
     scene.appendChild(svg);
-    // viewBox едет за содержимым, но прокрутка компенсирует сдвиг начала
-    // координат, чтобы схема не прыгала на экране.
-    if (lastVb) {
-      scene.scrollLeft += (lastVb.x1 - vb.x1) * zoom;
-      scene.scrollTop += (lastVb.y1 - vb.y1) * zoom;
+    var defs = el('defs', {}, svg);
+    var pat = el('pattern', { id: 'grid', width: gridStep, height: gridStep, patternUnits: 'userSpaceOnUse' }, defs);
+    el('circle', { cx: 0, cy: 0, r: 1, fill: 'var(--grid)' }, pat);
+    el('rect', { x: world.x1, y: world.y1, width: ww, height: wh, fill: 'url(#grid)', 'class': 'gridbg' }, svg);
+    if (!centered) {
+      centered = true;
+      scene.scrollLeft = ((vb.x1 + vb.x2) / 2 - world.x1) * zoom - scene.clientWidth / 2;
+      scene.scrollTop = ((vb.y1 + vb.y2) / 2 - world.y1) * zoom - scene.clientHeight / 2;
     }
-    lastVb = vb;
 
     function select(g, kind, name, desc) {
       svg.querySelectorAll('.el').forEach(function (n) { n.classList.remove('sel'); });
@@ -805,6 +1030,7 @@
       txt(g, c.d.x, c.subY, 'Device (составной)', 'sub dlabel');
       el('rect', { x: c.x, y: c.y, width: c.w, height: c.h, 'class': 'hit' }, g);
       clickable(g, 'Device', c.d.name, 'Преобразует, накапливает, отдаёт или регулирует ресурс. ' + c.desc);
+      if (c.t > 0.5) el('rect', { x: c.x + c.w - 5, y: c.y + c.h - 5, width: 10, height: 10, 'class': 'rsz', 'data-rsz': c.d.id }, g);
     });
 
     L.frames.forEach(function (f) { if (f.inner) drawFrame(f); });
@@ -816,6 +1042,21 @@
         var str = ln.pts.map(function (p) { return p.x + ',' + p.y; }).join(' ');
         el('polyline', { points: str, 'class': 'link' }, g);
         el('polyline', { points: str, 'class': 'hit' }, g);
+        // Ручки сегментов: внутренние отрезки трассы (без защитных отходов у разъёмов).
+        for (var j = 1; j < ln.pts.length - 2; j++) {
+          var P = ln.pts[j], Q = ln.pts[j + 1];
+          var horiz = P.y === Q.y, vert = P.x === Q.x;
+          if (!horiz && !vert) continue;
+          var lLast = ln.pts.length - 1;
+          // сегмент, упёртый в коллинеарный защитный отход, поперёк не двигается
+          if (j === 1 && (ln.pts[1].y === ln.pts[0].y) === horiz) continue;
+          if (j + 1 === lLast - 1 && (ln.pts[lLast].y === ln.pts[lLast - 1].y) === horiz) continue;
+          var span = horiz ? [Math.min(P.x, Q.x), Math.max(P.x, Q.x)] : [Math.min(P.y, Q.y), Math.max(P.y, Q.y)];
+          el('line', { x1: P.x, y1: P.y, x2: Q.x, y2: Q.y, 'class': 'lseg ' + (horiz ? 'h' : 'v'),
+            'data-link': l.l.id, 'data-line': ln.line_no, 'data-h': horiz ? 1 : 0,
+            'data-span': span.join(',') }, g);
+        }
+        segRoutes[l.l.id + ':' + ln.line_no] = ln.pts;
         if (ln.ext && ln.ext.opacity > 0.01) {
           var es = ln.ext.pts.map(function (p) { return p.x + ',' + p.y; }).join(' ');
           var eg = el('g', { opacity: ln.ext.opacity.toFixed(3) }, g);
@@ -833,14 +1074,17 @@
     L.devices.forEach(function (d) {
       var g = el('g', { 'data-dev': d.d.id }, svg);
       groupOpacity(g, d.opacity);
-      el('rect', { x: d.x, y: d.y, width: DEV_W, height: DEV_H, rx: 4, 'class': 'dev' }, g);
+      el('rect', { x: d.x, y: d.y, width: d.w, height: d.h, rx: 4, 'class': 'dev' }, g);
       txt(g, d.d.x, d.d.y - 3, d.d.name, 'dlabel');
       txt(g, d.d.x, d.d.y + 14, 'Device', 'sub dlabel');
       clickable(g, 'Device', d.d.name, d.desc);
+      el('rect', { x: d.x + d.w - 5, y: d.y + d.h - 5, width: 10, height: 10, 'class': 'rsz', 'data-rsz': d.d.id }, g);
     });
 
     L.ports.forEach(function (p) {
       var g = el('g', {}, svg);
+      if (p.pdev) g.setAttribute('data-pdev', p.pdev);
+      if (p.pframe) g.setAttribute('data-pframe', p.pframe);
       groupOpacity(g, p.opacity);
       var r = p.kind === 'conn' ? 6 : 7;
       el('circle', { cx: p.x, cy: p.y, r: r, 'class': p.kind }, g);
