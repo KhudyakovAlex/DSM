@@ -25,6 +25,7 @@
   h1 { font-size: 14px; font-weight: 500; margin: 0 0 10px; }
   svg { width: 100%; height: auto; display: block; touch-action: none; }
   body.editing g[data-dev] { cursor: grab; }
+  body.editing g[data-frame] { cursor: grab; }
   #edit-btn { margin: 0 0 10px; padding: 4px 12px; font: inherit; font-size: 12px;
               color: var(--fg); background: var(--card); border: 1px solid var(--border);
               border-radius: 6px; cursor: pointer; }
@@ -141,6 +142,12 @@
       var half = n === 2 ? Math.sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y)) / 2 : Infinity;
       var S0 = Math.min(STUB, half, Math.abs(h0 ? pts[1].x - a.x : pts[1].y - a.y));
       var SL = Math.min(STUB, half, Math.abs(hL ? pts[n - 2].x - b.x : pts[n - 2].y - b.y));
+      // Параллельные отходы на косом коротком линке: сумма отходов не длиннее
+      // расстояния между концами вдоль их оси, иначе средний сегмент идёт назад.
+      if (n === 2 && h0 === hL) {
+        var span = Math.abs(h0 ? b.x - a.x : b.y - a.y) / 2;
+        S0 = Math.min(S0, span); SL = Math.min(SL, span);
+      }
       var A = { x: a.x + (h0 ? (b.x >= a.x ? 1 : -1) * S0 : 0), y: a.y + (h0 ? 0 : (b.y >= a.y ? 1 : -1) * S0) };
       var B = { x: b.x + (hL ? (a.x >= b.x ? 1 : -1) * SL : 0), y: b.y + (hL ? 0 : (a.y >= b.y ? 1 : -1) * SL) };
       pp = [a, A].concat(pts.slice(1, n - 1), [B, b]);
@@ -242,8 +249,8 @@
       if (best) { h.x = best.q.x; h.y = best.q.y; }
     });
   }
-  function moveDevice(id, dx, dy) {
-    var m = model, moved = [];
+  function moveDeviceCore(id, dx, dy, moved) {
+    var m = model;
     function dev(d) {
       d.x += dx; d.y += dy;
       m.connectors.forEach(function (c) { if (c.device_id === d.id) { c.x += dx; c.y += dy; moved.push(c.id); } });
@@ -258,10 +265,11 @@
       });
     }
     dev(byId(m.devices)[id]);
-    // Контакт слитно: коннектор линка, парный смещённому коннектору Device,
-    // едет следом вместе с концом трассы своего линка.
-    var byIdC = byId(m.connectors);
-    var touched = {};
+  }
+  // Контакт слитно: коннектор линка, парный смещённому коннектору Device,
+  // едет следом вместе с концом трассы своего линка.
+  function cascadeContacts(moved, dx, dy, touched) {
+    var m = model, byIdC = byId(m.connectors);
     for (var i = 0; i < moved.length; i++) {
       m.connections.forEach(function (p) {
         var other = p.connector_a_id === moved[i] ? p.connector_b_id :
@@ -301,15 +309,50 @@
         moved.push(other);
       });
     }
+  }
+  function finishMove(touched) {
     Object.keys(touched).forEach(function (lid) { snapLinkHolders(+lid); });
     render();
+  }
+  function moveDevice(id, dx, dy) {
+    var moved = [], touched = {};
+    moveDeviceCore(id, dx, dy, moved);
+    cascadeContacts(moved, dx, dy, touched);
+    finishMove(touched);
+  }
+  // Перемещение Frame: вместе с ним едет всё закреплённое на нём —
+  // Device и Link через пары Holder↔Holder, со своим каскадом контактов.
+  function moveFrame(id, dx, dy) {
+    var m = model, moved = [], touched = {}, seen = {};
+    var f = byId(m.frames)[id];
+    f.x += dx; f.y += dy;
+    if (f.base_y != null) f.base_y += dy;
+    var fh = {};
+    m.holders.forEach(function (h) { if (h.frame_id === id) { h.x += dx; h.y += dy; fh[h.id] = true; } });
+    m.bindings.forEach(function (b) {
+      var mine = fh[b.holder_a_id] ? b.holder_a_id : fh[b.holder_b_id] ? b.holder_b_id : null;
+      if (mine == null) return;
+      var h = byId(m.holders)[mine === b.holder_a_id ? b.holder_b_id : b.holder_a_id];
+      var key = (h.device_id ? 'd' : 'l') + (h.device_id || h.link_id);
+      if (seen[key]) return;
+      seen[key] = true;
+      if (h.device_id) moveDeviceCore(h.device_id, dx, dy, moved);
+      else { moveLink(byId(m.links)[h.link_id], dx, dy, moved); touched[h.link_id] = true; }
+    });
+    cascadeContacts(moved, dx, dy, touched);
+    finishMove(touched);
   }
 
   document.getElementById('scene').addEventListener('pointerdown', function (e) {
     if (!model || !editMode || e.target.closest('.xbtn')) return;
     var g = e.target.closest('g[data-dev]');
-    if (!g) return;
-    drag = { id: +g.getAttribute('data-dev'), cx: e.clientX, cy: e.clientY };
+    if (g) {
+      drag = { kind: 'dev', id: +g.getAttribute('data-dev'), cx: e.clientX, cy: e.clientY };
+    } else {
+      var fg = e.target.closest('g[data-frame]');
+      if (!fg) return;
+      drag = { kind: 'frame', id: +fg.getAttribute('data-frame'), cx: e.clientX, cy: e.clientY };
+    }
     dragMoved = false;
     e.preventDefault();
   });
@@ -323,7 +366,8 @@
     var ctm = svg.getScreenCTM();
     var dx = (e.clientX - drag.cx) / ctm.a, dy = (e.clientY - drag.cy) / ctm.d;
     drag.cx = e.clientX; drag.cy = e.clientY;
-    moveDevice(drag.id, dx, dy);
+    if (drag.kind === 'frame') moveFrame(drag.id, dx, dy);
+    else moveDevice(drag.id, dx, dy);
   });
   document.addEventListener('pointerup', function () { drag = null; });
   document.getElementById('scene').addEventListener('click', function (e) {
@@ -635,6 +679,20 @@
     portGroups(m.connectors, connPos, connOpacity, 'conn', m.connections, 'connector_a_id', 'connector_b_id');
     portGroups(m.holders, holdPos, holdOpacity, 'hold', m.bindings, 'holder_a_id', 'holder_b_id');
 
+    // Подписи линков не накладываем друг на друга: сдвигаем по вертикали.
+    var placed = [];
+    L.labels.forEach(function (t) {
+      var x1 = t.anchor === 'middle' ? t.x - t.w / 2 : t.anchor === 'end' ? t.x - t.w : t.x;
+      var box = { x1: x1, x2: x1 + t.w, y1: t.y - 11, y2: t.y + 3 };
+      [0, -14, 14, -28, 28, -42, 42].some(function (dy) {
+        var b = { x1: box.x1, x2: box.x2, y1: box.y1 + dy, y2: box.y2 + dy };
+        var hit = placed.some(function (p) { return b.x1 < p.x2 && p.x1 < b.x2 && b.y1 < p.y2 && p.y1 < b.y2; });
+        if (!hit) { box = b; t.y += dy; }
+        return !hit;
+      });
+      placed.push(box);
+    });
+
     return L;
   }
 
@@ -690,7 +748,7 @@
         svg.classList.remove('has-sel');
         infoKind.textContent = 'схема';
         infoName.textContent = 'Выберите элемент';
-        infoDesc.textContent = 'Кликните по элементу схемы. Кнопка «+» на составном Device раскрывает его внутреннюю схему. Клик по пустому месту или Esc — сброс выделения. Кнопка «Редактировать схему» включает перетаскивание Device (правка раскладки в памяти сессии).';
+        infoDesc.textContent = 'Кликните по элементу схемы. Кнопка «+» на составном Device раскрывает его внутреннюю схему. Клик по пустому месту или Esc — сброс выделения. Кнопка «Редактировать схему» включает перетаскивание Device и Frame (правка раскладки в памяти сессии).';
         return;
       }
       g.classList.add('sel');
@@ -706,7 +764,7 @@
     function groupOpacity(g, op) { if (op < 1) g.setAttribute('opacity', op.toFixed(3)); }
 
     function drawFrame(f) {
-      var g = el('g', {}, svg);
+      var g = el('g', { 'data-frame': f.f.id }, svg);
       groupOpacity(g, f.opacity);
       el('rect', { x: f.x1, y: f.y1, width: f.x2 - f.x1, height: f.y2 - f.y1, rx: 6, 'class': 'frame-rect' }, g);
       el('rect', { x: f.x1, y: f.y1, width: f.x2 - f.x1, height: f.y2 - f.y1, 'class': 'hit' }, g);
