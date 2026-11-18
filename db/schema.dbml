@@ -1,7 +1,8 @@
 // Схема ядра DSM (учебная, только текущие сущности).
-// Дублирует db/init.sql. Сущности: Device, Link, Frame, Resource, Connector, Holder.
+// Дублирует db/init.sql. Логика: сущности и связи, без координат.
+// Сущности: Device, Link, Frame, Resource, Connector, Holder.
 // Ресурсное соединение = пара Connector↔Connector; механическая привязка = пара Holder↔Holder.
-// Координаты — для отрисовки мнемосхемы веб-интерфейсом.
+// Представление: view + placement (геометрия в jsonb); новое представление не меняет логические таблицы.
 
 Table resource {
   id integer [pk, increment]
@@ -14,12 +15,8 @@ Table device {
   id integer [pk, increment]
   name text [not null]
   parent_device_id integer [ref: > device.id]
-  x double
-  y double
-  w double
-  h double
 
-  Note: 'Устройство: преобразует, накапливает, отдаёт или регулирует ресурс. Составное Device содержит внутреннюю схему (Device + Link + Frame). Размещение — точка (x, y); w, h — габарит составного Device'
+  Note: 'Устройство: преобразует, накапливает, отдаёт или регулирует ресурс. Составное Device содержит внутреннюю схему (Device + Link + Frame). Размещение — в placement'
 }
 
 Table link {
@@ -29,18 +26,7 @@ Table link {
   parent_device_id integer [ref: > device.id]
   parent_link_id integer [ref: > link.id]
 
-  Note: 'Соединение: пассивно передаёт ресурс без изменения его вида. Составной Link (кабель → жилы); может входить в состав Device. Трасса — в link_point'
-}
-
-Table link_point {
-  id integer [pk, increment]
-  link_id integer [not null, ref: > link.id]
-  line_no integer [not null, default: 1]
-  ord integer [not null]
-  x double [not null]
-  y double [not null]
-
-  Note: 'Точка трассы Link; line_no — ветвь трассы (разветвление без разделения Link), ord — порядок точек'
+  Note: 'Соединение: пассивно передаёт ресурс без изменения его вида. Составной Link (кабель → жилы); может входить в состав Device. Трасса — в placement'
 }
 
 Table frame {
@@ -48,11 +34,8 @@ Table frame {
   name text [not null]
   parent_device_id integer [ref: > device.id]
   parent_frame_id integer [ref: > frame.id]
-  x double
-  y double
-  base_y double
 
-  Note: 'Несущая конструкция: ресурс не передаёт, коннекторов нет. (x, y) — вершина, base_y — уровень основания'
+  Note: 'Несущая конструкция: ресурс не передаёт, коннекторов нет. Размещение — в placement'
 }
 
 Table connector {
@@ -61,10 +44,8 @@ Table connector {
   device_id integer [ref: > device.id]
   link_id integer [ref: > link.id]
   resource_id integer [ref: > resource.id]
-  x double
-  y double
 
-  Note: 'Разъём: точка подключения ресурса. Ровно один владелец: Device или Link (CHECK connector_one_owner)'
+  Note: 'Разъём: точка подключения ресурса. Ровно один владелец: Device или Link (CHECK connector_one_owner). Позиция — в placement'
 }
 
 Table holder {
@@ -73,10 +54,8 @@ Table holder {
   device_id integer [ref: > device.id]
   link_id integer [ref: > link.id]
   frame_id integer [ref: > frame.id]
-  x double
-  y double
 
-  Note: 'Крепление: деталь или зона контакта. Ровно один владелец: Device, Link или Frame (CHECK holder_one_owner)'
+  Note: 'Крепление: деталь или зона контакта. Ровно один владелец: Device, Link или Frame (CHECK holder_one_owner). Позиция — в placement'
 }
 
 Table connector_plug {
@@ -93,4 +72,21 @@ Table holder_plug {
   holder_b_id integer [not null, ref: > holder.id]
 
   Note: 'Пара Holder↔Holder (контакт с Frame). CHECK a < b; UNIQUE (a, b)'
+}
+
+Table view {
+  id integer [pk, increment]
+  name text [not null, unique]
+
+  Note: 'Представление модели: мнемосхема 2D, 3D и пр. Новое представление — новая запись, логическая схема не меняется'
+}
+
+Table placement {
+  id integer [pk, increment]
+  view_id integer [not null, ref: > view.id]
+  entity_type text [not null]
+  entity_id integer [not null]
+  geom jsonb [not null]
+
+  Note: 'Размещение сущности в представлении. Универсальная ссылка (entity_type + entity_id) без FK на логические таблицы; UNIQUE (view_id, entity_type, entity_id). geom: 2D {x, y[, w, h][, base_y]}, трасса Link {lines: [{line_no, points}]}'
 }
