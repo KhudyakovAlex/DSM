@@ -96,7 +96,7 @@ CREATE TABLE placement (
     geom        jsonb NOT NULL,
     CONSTRAINT placement_unique UNIQUE (view_id, entity_type, entity_id)
 );
-COMMENT ON TABLE placement IS 'Размещение сущности в представлении. Универсальная ссылка (entity_type + entity_id) без FK на логические таблицы; geom — геометрия конкретного вида: 2D {x, y[, w, h][, base_y]}, трасса Link {lines: [{line_no, points: [[x, y], …]}]}, 3D — свой формат';
+COMMENT ON TABLE placement IS 'Размещение сущности в представлении. Универсальная ссылка (entity_type + entity_id) без FK на логические таблицы; geom — геометрия конкретного вида: 2D {x, y[, w, h][, base_y]}, трасса Link {lines: [{line_no, points: [[x, y], …]}]}, 3D — свой формат. В 2D внутренние Device/Frame/Link — относительно родителя, порты Device/Frame — относительно владельца, порты Link — в координатах трассы';
 
 -- Начальные данные: пример «ТП — шкаф (автомат, счётчик, контроллер, контактор) — два светильника на опорах».
 -- Шкаф — составной Device. Два варианта вывода на границу (§5 ядра):
@@ -299,3 +299,44 @@ INSERT INTO placement (view_id, entity_type, entity_id, geom) VALUES
     (1, 'holder', 14, '{"x": 480, "y": 145}'),
     (1, 'holder', 15, '{"x": 280, "y": 275}'),
     (1, 'holder', 16, '{"x": 440, "y": 275}');
+
+-- Перевод исходного абсолютного размещения в координаты родителя/владельца.
+WITH RECURSIVE link_owner AS (
+    SELECT id, parent_device_id FROM link WHERE parent_link_id IS NULL
+    UNION ALL
+    SELECT l.id, COALESCE(l.parent_device_id, p.parent_device_id)
+    FROM link l JOIN link_owner p ON p.id = l.parent_link_id
+), owners AS (
+    SELECT 'device' AS entity_type, id AS entity_id,
+           'device' AS origin_type, parent_device_id AS origin_id FROM device
+    UNION ALL
+    SELECT 'frame', id, CASE WHEN parent_frame_id IS NOT NULL THEN 'frame' ELSE 'device' END,
+           COALESCE(parent_frame_id, parent_device_id) FROM frame
+    UNION ALL
+    SELECT 'link', id, 'device', parent_device_id FROM link_owner
+    UNION ALL
+    SELECT 'connector', c.id, 'device', COALESCE(c.device_id, l.parent_device_id)
+    FROM connector c LEFT JOIN link_owner l ON l.id = c.link_id
+    UNION ALL
+    SELECT 'holder', h.id, CASE WHEN h.frame_id IS NOT NULL THEN 'frame' ELSE 'device' END,
+           COALESCE(h.device_id, h.frame_id, l.parent_device_id)
+    FROM holder h LEFT JOIN link_owner l ON l.id = h.link_id
+), offsets AS (
+    SELECT p.id, (origin.geom->>'x')::numeric AS x, (origin.geom->>'y')::numeric AS y
+    FROM placement p JOIN owners o ON o.entity_type = p.entity_type AND o.entity_id = p.entity_id
+    JOIN placement origin ON origin.view_id = p.view_id
+        AND origin.entity_type = o.origin_type AND origin.entity_id = o.origin_id
+    JOIN view v ON v.id = p.view_id AND v.name = 'Мнемосхема 2D'
+)
+UPDATE placement p SET geom = CASE WHEN p.geom ? 'lines' THEN
+    jsonb_set(p.geom, '{lines}', (
+        SELECT jsonb_agg(jsonb_set(line, '{points}', (
+            SELECT jsonb_agg(jsonb_build_array((point->>0)::numeric - o.x, (point->>1)::numeric - o.y) ORDER BY point_ord)
+            FROM jsonb_array_elements(line->'points') WITH ORDINALITY AS pts(point, point_ord)
+        )) ORDER BY line_ord)
+        FROM jsonb_array_elements(p.geom->'lines') WITH ORDINALITY AS lines(line, line_ord)
+    ))
+    ELSE p.geom || jsonb_build_object('x', (p.geom->>'x')::numeric - o.x, 'y', (p.geom->>'y')::numeric - o.y)
+        || CASE WHEN p.geom ? 'base_y' THEN jsonb_build_object('base_y', (p.geom->>'base_y')::numeric - o.y) ELSE '{}'::jsonb END
+    END
+FROM offsets o WHERE p.id = o.id;

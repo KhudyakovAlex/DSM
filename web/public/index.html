@@ -18,7 +18,7 @@
     --link: light-dark(#2563eb, #60a5fa);
     --holder: light-dark(#d97706, #fbbf24);
     --accent: light-dark(#7c3aed, #a78bfa);
-    --grid: light-dark(rgba(0,0,0,.06), rgba(255,255,255,.06));
+    --grid: light-dark(rgba(0,0,0,.25), rgba(255,255,255,.3));
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
@@ -28,6 +28,11 @@
   .topbar { display: flex; align-items: center; justify-content: space-between;
             gap: 12px; margin: 0 0 10px; }
   h1 { font-size: 14px; font-weight: 500; margin: 0; }
+  .field-nav { display: flex; align-items: center; gap: 10px; }
+  #back-btn { padding: 4px 10px; color: var(--fg); background: var(--card);
+              border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+  #back-btn[hidden] { display: none; }
+  .field-boundary { pointer-events: none; }
   #scene { flex: 1; min-height: 0; border-radius: 8px; overflow: auto; cursor: grab; }
   svg { display: block; touch-action: none; }
   body.editing g[data-dev] { cursor: grab; }
@@ -67,7 +72,7 @@
   body.editing .lseg.h { cursor: row-resize; }
   body.editing .lseg.v { cursor: col-resize; }
   .xbtn rect { fill: var(--card); stroke: var(--dev); stroke-width: 1.5; }
-  .xbtn line { stroke: var(--dev); stroke-width: 1.5; }
+  .xbtn line, .xbtn path { fill: none; stroke: var(--dev); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
   svg.has-sel .el { opacity: .3; }
   svg.has-sel .el.sel { opacity: 1; }
   svg.has-sel text.llabel { opacity: .3; }
@@ -82,7 +87,10 @@
 </head>
 <body>
 <div class="topbar">
-  <h1>DSM — мнемосхема системы (данные из PostgreSQL)</h1>
+  <div class="field-nav">
+    <button id="back-btn" type="button" hidden>← Назад</button>
+    <h1 id="field-title">DSM — мнемосхема системы (данные из PostgreSQL)</h1>
+  </div>
   <div class="tools">
     <input id="grid-step" type="number" min="5" max="200" step="5" value="20" title="Шаг сетки (единицы модели)" aria-label="Шаг сетки">
     <button class="zbtn" id="zoom-out" type="button" title="Уменьшить масштаб" aria-label="Уменьшить масштаб">−</button>
@@ -123,28 +131,40 @@
 
   // Ортогональная перестройка трассы: концы могли сместиться (проекция портов
   // на границу свёрнутого Device), ориентации сегментов берутся из хранимой трассы.
-  // ex0/exL — ось отхода от края Device ('h'/'v'): линк сначала отходит прямым
-  // участком по нормали к грани, изгибы только после отхода.
+  // ex0/exL — ось и знак отхода от края Device ({a:'h'|'v', s}) либо строка
+  // оси для стыков без устройства: линк сначала отходит прямым участком по
+  // нормали к грани, изгибы только после отхода.
   function orthoRoute(pts, orig, ex0, exL) {
     var n = pts.length;
     if (n < 2) return pts.slice();
+    var e0 = ex0 ? (typeof ex0 === 'string' ? { h: ex0 === 'h', s: 0 } : { h: ex0.a === 'h', s: ex0.s }) : null;
+    var eL = exL ? (typeof exL === 'string' ? { h: exL === 'h', s: 0 } : { h: exL.a === 'h', s: exL.s }) : null;
     var orient = [];
     for (var i = 0; i < n - 1; i++) {
       orient.push(Math.abs(orig[i + 1].x - orig[i].x) >= Math.abs(orig[i + 1].y - orig[i].y));
     }
-    // Угол перегиба у края Device едет за концом трассы по нормали к грани,
-    // иначе после сдвига девайса вертикаль уезжает, а угол остаётся на месте.
-    if (n > 2) {
-      if (ex0) { if (ex0 === 'h') pts[1].y = pts[0].y; else pts[1].x = pts[0].x; }
-      if (exL) { if (exL === 'h') pts[n - 2].y = pts[n - 1].y; else pts[n - 2].x = pts[n - 1].x; }
+    var h0 = e0 ? e0.h : orient[0];
+    var hL = eL ? eL.h : orient[n - 2];
+    // Два параллельных отхода на разных осях и одна средняя вершина: угол не
+    // может лежать сразу на обеих осях — разворачиваем среднюю вершину в
+    // перемычку (Z), иначе проекция даёт возвратный хвост.
+    if (n === 3 && h0 === hL && (h0 ? pts[0].y !== pts[2].y : pts[0].x !== pts[2].x)) {
+      var mid = pts[1];
+      pts = h0
+        ? [pts[0], { x: mid.x, y: pts[0].y }, { x: mid.x, y: pts[2].y }, pts[2]]
+        : [pts[0], { x: pts[0].x, y: mid.y }, { x: pts[2].x, y: mid.y }, pts[2]];
+      orient = [h0, !h0, h0];
+      n = 4;
     }
-    if (ex0) orient[0] = ex0 === 'h';
-    if (exL) orient[n - 2] = exL === 'h';
+    if (n > 2) {
+      if (e0) { if (e0.h) pts[1].y = pts[0].y; else pts[1].x = pts[0].x; }
+      if (eL) { if (eL.h) pts[n - 2].y = pts[n - 1].y; else pts[n - 2].x = pts[n - 1].x; }
+    }
+    if (e0) orient[0] = h0;
+    if (eL) orient[n - 2] = hL;
     var pp = pts;
-    if (ex0 || exL) {
+    if (e0 || eL) {
       var STUB = 25, a = pts[0], b = pts[n - 1];
-      var h0 = ex0 ? ex0 === 'h' : orient[0];
-      var hL = exL ? exL === 'h' : orient[n - 2];
       // Отход не длиннее примыкающего сегмента, иначе на коротких линках
       // отходы двух концов перекрываются и дают возвратный хвост.
       var half = n === 2 ? Math.sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y)) / 2 : Infinity;
@@ -156,8 +176,15 @@
         var span = Math.abs(h0 ? b.x - a.x : b.y - a.y) / 2;
         S0 = Math.min(S0, span); SL = Math.min(SL, span);
       }
-      var A = { x: a.x + (h0 ? (b.x >= a.x ? 1 : -1) * S0 : 0), y: a.y + (h0 ? 0 : (b.y >= a.y ? 1 : -1) * S0) };
-      var B = { x: b.x + (hL ? (a.x >= b.x ? 1 : -1) * SL : 0), y: b.y + (hL ? 0 : (a.y >= b.y ? 1 : -1) * SL) };
+      // Знак отхода: у Device — наружу грани; у стыка — по фактическому
+      // направлению первого сегмента трассы, а не «к дальнему концу»:
+      // иначе отход смотрит против хода трассы и даёт хвост.
+      var d0 = h0 ? pts[1].x - a.x : pts[1].y - a.y;
+      var dL = hL ? pts[n - 2].x - b.x : pts[n - 2].y - b.y;
+      var s0 = e0 && e0.s ? e0.s : (d0 ? (d0 > 0 ? 1 : -1) : (h0 ? (b.x >= a.x ? 1 : -1) : (b.y >= a.y ? 1 : -1)));
+      var sL = eL && eL.s ? eL.s : (dL ? (dL > 0 ? 1 : -1) : (hL ? (a.x >= b.x ? 1 : -1) : (a.y >= b.y ? 1 : -1)));
+      var A = { x: a.x + (h0 ? s0 * S0 : 0), y: a.y + (h0 ? 0 : s0 * S0) };
+      var B = { x: b.x + (hL ? sL * SL : 0), y: b.y + (hL ? 0 : sL * SL) };
       pp = [a, A].concat(pts.slice(1, n - 1), [B, b]);
       orient = [h0].concat(orient, [hL]);
     }
@@ -180,10 +207,131 @@
       else out.push({ x: b2.x, y: a2.y });
     }
     out.push(b2);
-    return out.filter(function (p, i) { return i === 0 || p.x !== out[i - 1].x || p.y !== out[i - 1].y; });
+    out = out.filter(function (p, i) { return i === 0 || p.x !== out[i - 1].x || p.y !== out[i - 1].y; });
+    // Возвратные хвосты (вниз-вверх по одной линии) не рисуются: средняя
+    // вершина шипа удаляется, трасса остаётся ортогональной и связной.
+    for (var g = 0; g < 60; g++) {
+      var cut = -1;
+      for (var i = 1; i < out.length - 1; i++) {
+        var pa = out[i - 1], pb = out[i], pc = out[i + 1];
+        var coll = (pa.x === pb.x && pb.x === pc.x) || (pa.y === pb.y && pb.y === pc.y);
+        if (coll && ((pb.x - pa.x) * (pc.x - pb.x) + (pb.y - pa.y) * (pc.y - pb.y)) < 0) { cut = i; break; }
+      }
+      if (cut < 0) break;
+      out.splice(cut, 1);
+    }
+    return out;
   }
 
-  var model = null, anim = {}, raf = null, deselect = function () {};
+  var model = null, placementModel = null, anim = {}, raf = null, deselect = function () {};
+  var focusId = null, fieldStack = [];
+
+  function linkParent(l, links) {
+    return l.parent_device_id || (l.parent_link_id ? linkParent(links[l.parent_link_id], links) : null);
+  }
+
+  function frameParent(f, frames) {
+    return f.parent_device_id || (f.parent_frame_id ? frameParent(frames[f.parent_frame_id], frames) : null);
+  }
+
+  function loadField() {
+    model = JSON.parse(JSON.stringify(placementModel));
+    var m = model, links = byId(m.links);
+    if (focusId != null) {
+      var ids = devSubtree(focusId);
+      m.devices = m.devices.filter(function (d) { return ids[d.id]; });
+      m.links = m.links.filter(function (l) { return ids[linkParent(l, links)]; });
+      var allFrames = byId(m.frames);
+      m.frames = m.frames.filter(function (f) { return ids[frameParent(f, allFrames)]; });
+      var ls = byId(m.links), fs = byId(m.frames);
+      m.linkPoints = m.linkPoints.filter(function (p) { return ls[p.link_id]; });
+      m.connectors = m.connectors.filter(function (c) { return ids[c.device_id] || ls[c.link_id]; });
+      m.holders = m.holders.filter(function (h) {
+        return (ids[h.device_id] && h.device_id !== focusId) || ls[h.link_id] || fs[h.frame_id];
+      });
+      var cs = byId(m.connectors), hs = byId(m.holders);
+      m.connections = m.connections.filter(function (p) { return cs[p.connector_a_id] && cs[p.connector_b_id]; });
+      m.bindings = m.bindings.filter(function (p) { return hs[p.holder_a_id] && hs[p.holder_b_id]; });
+      var root = byId(m.devices)[focusId];
+      root.x = root.y = 0;
+      root.parent_device_id = null;
+    }
+    var devices = byId(m.devices), frames = byId(m.frames), doneD = {}, doneF = {};
+    function device(d) {
+      if (doneD[d.id]) return;
+      if (d.parent_device_id) {
+        var p = devices[d.parent_device_id];
+        device(p);
+        if (d.x != null) { d.x += p.x; d.y += p.y; }
+      }
+      doneD[d.id] = true;
+    }
+    function frame(f) {
+      if (doneF[f.id]) return;
+      var p = f.parent_frame_id ? frames[f.parent_frame_id] : devices[f.parent_device_id];
+      if (f.parent_frame_id) frame(p);
+      if (p && f.x != null) {
+        f.x += p.x; f.y += p.y;
+        if (f.base_y != null) f.base_y += p.y;
+      }
+      doneF[f.id] = true;
+    }
+    m.devices.forEach(device);
+    m.frames.forEach(frame);
+    links = byId(m.links);
+    function port(p) {
+      var parent = p.device_id ? devices[p.device_id] : p.frame_id ? frames[p.frame_id] : devices[linkParent(links[p.link_id], links)];
+      if (parent && p.x != null) { p.x += parent.x; p.y += parent.y; }
+    }
+    m.connectors.forEach(port);
+    m.holders.forEach(port);
+    m.linkPoints.forEach(function (p) {
+      var d = devices[linkParent(links[p.link_id], links)];
+      if (d) { p.x += d.x; p.y += d.y; }
+    });
+  }
+
+  function savePlacement() {
+    var m = model, devices = byId(m.devices), frames = byId(m.frames), links = byId(m.links);
+    ['devices', 'frames', 'connectors', 'holders'].forEach(function (key) {
+      var stored = byId(placementModel[key]);
+      m[key].forEach(function (row) {
+        var target = stored[row.id];
+        if (key === 'devices') { target.w = row.w; target.h = row.h; }
+        if (key === 'devices' && row.id === focusId) return;
+        var p;
+        if (key === 'devices') p = devices[row.parent_device_id];
+        else if (key === 'frames') p = row.parent_frame_id ? frames[row.parent_frame_id] : devices[row.parent_device_id];
+        else p = row.device_id ? devices[row.device_id] : row.frame_id ? frames[row.frame_id] : devices[linkParent(links[row.link_id], links)];
+        target.x = row.x == null ? null : row.x - (p ? p.x : 0);
+        target.y = row.y == null ? null : row.y - (p ? p.y : 0);
+        if (key === 'frames' && row.base_y != null) target.base_y = row.base_y - (p ? p.y : 0);
+      });
+    });
+    placementModel.linkPoints = placementModel.linkPoints.filter(function (p) { return !links[p.link_id]; });
+    m.linkPoints.forEach(function (p) {
+      var d = devices[linkParent(links[p.link_id], links)];
+      placementModel.linkPoints.push(Object.assign({}, p, { x: p.x - (d ? d.x : 0), y: p.y - (d ? d.y : 0) }));
+    });
+  }
+
+  function openField(id) {
+    var scene = document.getElementById('scene');
+    fieldStack.push({ id: focusId, world: world, zoom: zoom, left: scene.scrollLeft, top: scene.scrollTop });
+    focusId = id;
+    world = null; centered = false; drag = null; dragMoved = false;
+    loadField(); render();
+  }
+
+  function closeField() {
+    var previous = fieldStack.pop();
+    focusId = previous.id;
+    world = previous.world; zoom = previous.zoom; centered = true;
+    drag = null; dragMoved = false;
+    loadField(); render();
+    var scene = document.getElementById('scene');
+    scene.scrollLeft = previous.left; scene.scrollTop = previous.top;
+  }
   var drag = null, dragMoved = false, editMode = false;
   // Фиксированный масштаб: 1 единица модели = zoom px; авто-подгонки под
   // контейнер нет, выход за край даёт прокрутку, зум — только кнопками.
@@ -230,7 +378,11 @@
     var t = editMode ? 'Закончить редактирование' : 'Редактировать схему';
     this.title = t;
     this.setAttribute('aria-label', t);
+    if (raf) { cancelAnimationFrame(raf); raf = null; }
+    if (!editMode) while (focusId != null) closeField();
+    if (model) render();
   });
+  document.getElementById('back-btn').addEventListener('click', closeField);
 
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') deselect();
@@ -238,11 +390,13 @@
 
   // Перемещение Device: вместе с ним едут его порты, крепления и внутренняя
   // схема составного Device; парные коннекторы линков следуют за контактом.
-  function moveLink(l, dx, dy, moved) {
+  function moveLink(l, dx, dy, moved, seen) {
+    if (seen && seen['link' + l.id]) return;
+    if (seen) seen['link' + l.id] = true;
     model.linkPoints.forEach(function (p) { if (p.link_id === l.id) { p.x += dx; p.y += dy; } });
     model.connectors.forEach(function (c) { if (c.link_id === l.id) { c.x += dx; c.y += dy; if (moved) moved.push(c.id); } });
     model.holders.forEach(function (h) { if (h.link_id === l.id) { h.x += dx; h.y += dy; } });
-    model.links.forEach(function (k) { if (k.parent_link_id === l.id) moveLink(k, dx, dy, moved); });
+    model.links.forEach(function (k) { if (k.parent_link_id === l.id) moveLink(k, dx, dy, moved, seen); });
   }
   function nearestOnSeg(p, a, b) {
     var vx = b.x - a.x, vy = b.y - a.y;
@@ -257,23 +411,106 @@
   }
   // Крепления линка остаются на трассе после её перестройки.
   function devSizeM(d) {
-    var comp = model.devices.some(function (o) { return o.parent_device_id === d.id; });
-    if (!comp) return { w: d.w || DEV_W, h: d.h || DEV_H };
-    var t = anim[d.id] || 0;
+    if (!isCompDev(d)) return { w: d.w || DEV_W, h: d.h || DEV_H };
+    var t = d.id === focusId ? 1 : editMode ? 0 : anim[d.id] || 0;
     return { w: lerp(DEV_W, d.w || DEV_W, t), h: lerp(DEV_H, d.h || DEV_H, t) };
   }
-  function exitAtM(pt, fb) {
+  function exitAtM(pt, fb, lid) {
     var c = null;
     model.connectors.forEach(function (cc) { if (cc.device_id && cc.x === pt.x && cc.y === pt.y) c = cc; });
     if (!c) return fb ? 'h' : 'v';
     var d = byId(model.devices)[c.device_id], s = devSizeM(d);
-    return Math.abs(pt.x - d.x) / (s.w / 2) >= Math.abs(pt.y - d.y) / (s.h / 2) ? 'h' : 'v';
+    var horiz = Math.abs(pt.x - d.x) / (s.w / 2) >= Math.abs(pt.y - d.y) / (s.h / 2);
+    var sg = horiz ? (pt.x >= d.x ? 1 : -1) : (pt.y >= d.y ? 1 : -1);
+    var inside = d.id === focusId || (lid && linkParent(byId(model.links)[lid], byId(model.links)) === d.id);
+    return { a: horiz ? 'h' : 'v', s: inside ? -sg : sg };
   }
-  function routeOf(arr) {
+  function alignDevicePorts(touched) {
+    var devices = byId(model.devices), connectors = byId(model.connectors);
+    model.connectors.forEach(function (c) {
+      if (!c.device_id || c.device_id === focusId || c.x == null) return;
+      var partners = model.connections.filter(function (p) {
+        return p.connector_a_id === c.id || p.connector_b_id === c.id;
+      }).map(function (p) { return connectors[p.connector_a_id === c.id ? p.connector_b_id : p.connector_a_id]; });
+      if (partners.length !== 1 || !partners[0].link_id) return;
+      var lc = partners[0], lines = {};
+      if (!touched[lc.link_id]) return;
+      model.linkPoints.forEach(function (p) {
+        if (p.link_id === lc.link_id) (lines[p.line_no] = lines[p.line_no] || []).push(p);
+      });
+      Object.keys(lines).forEach(function (k) {
+        var arr = lines[k].sort(function (a, b) { return a.ord - b.ord; });
+        if (arr.length < 2) return;
+        if (arr[arr.length - 1].x === lc.x && arr[arr.length - 1].y === lc.y) arr = arr.slice().reverse();
+        if (arr[0].x !== lc.x || arr[0].y !== lc.y) return;
+        // Соседний угол едет с устройством; направление берём от следующей неподвижной вершины.
+        var target = arr[Math.min(2, arr.length - 1)];
+        var d = devices[c.device_id], s = devSizeM(d);
+        var dx = target.x - d.x, dy = target.y - d.y;
+        if (Math.abs(dx) <= s.w / 2 && Math.abs(dy) <= s.h / 2) return;
+        var oldH = Math.abs(c.x - d.x) / (s.w / 2) >= Math.abs(c.y - d.y) / (s.h / 2);
+        var horiz = Math.abs(dx) / (s.w / 2) >= Math.abs(dy) / (s.h / 2);
+        var sg = (horiz ? dx : dy) >= 0 ? 1 : -1;
+        var oldSg = (oldH ? c.x - d.x : c.y - d.y) >= 0 ? 1 : -1;
+        if (horiz === oldH && sg === oldSg) return;
+        var tangent = horiz ? 'y' : 'x', normal = horiz ? 'x' : 'y';
+        var half = (horiz ? s.h : s.w) / 2;
+        var base = horiz === oldH ? c[tangent] : d[tangent];
+        var obstacles = model.connectors.filter(function (o) { return o.device_id === d.id && o.id !== c.id; })
+          .concat(model.holders.filter(function (h) { return h.device_id === d.id; }));
+        var pos = null;
+        for (var offset = 0; offset <= 2 * half && !pos; offset += 14) {
+          [base + offset, base - offset].some(function (v) {
+            if (Math.abs(v - d[tangent]) > half - 6) return false;
+            var p = { x: d.x, y: d.y };
+            p[normal] += sg * (horiz ? s.w : s.h) / 2;
+            p[tangent] = v;
+            if (obstacles.some(function (o) { return Math.hypot(p.x - o.x, p.y - o.y) < 14; })) return false;
+            pos = p;
+            return true;
+          });
+        }
+        if (!pos) return;
+        c.x = lc.x = arr[0].x = pos.x;
+        c.y = lc.y = arr[0].y = pos.y;
+        if (arr.length > 2) {
+          arr[1][tangent] = pos[tangent];
+          arr[1][normal] = target[normal];
+        }
+      });
+    });
+  }
+  // Трасса не заходит внутрь Device: вершина у конца, подключённого к разъёму
+  // устройства, всегда снаружи по нормали грани, не ближе защитного отхода.
+  function repairOutside(lid) {
+    var lines = {};
+    model.linkPoints.forEach(function (p) {
+      if (p.link_id === lid) (lines[p.line_no] = lines[p.line_no] || []).push(p);
+    });
+    Object.keys(lines).forEach(function (k) {
+      var arr = lines[k].sort(function (a, b) { return a.ord - b.ord; });
+      var n = arr.length; if (n < 3) return;
+      [[0, 1], [n - 1, n - 2]].forEach(function (pr) {
+        var end = arr[pr[0]], nb = arr[pr[1]], c = null;
+        model.connectors.forEach(function (cc) {
+          if (cc.device_id && cc.x === end.x && cc.y === end.y) c = cc;
+        });
+        if (!c) return;
+        var d = byId(model.devices)[c.device_id]; if (!d || d.x == null) return;
+        var s = devSizeM(d);
+        var horiz = Math.abs(end.x - d.x) / (s.w / 2) >= Math.abs(end.y - d.y) / (s.h / 2);
+        var ax = horiz ? 'x' : 'y';
+        var links = byId(model.links), inside = d.id === focusId || linkParent(links[lid], links) === d.id;
+        var sg = (end[ax] >= d[ax] ? 1 : -1) * (inside ? -1 : 1);
+        if ((nb[ax] - end[ax]) * sg < 25) nb[ax] = end[ax] + sg * 25;
+      });
+    });
+  }
+  function routeOf(arr, lid) {
     if (arr.length < 2) return arr;
     var h0 = Math.abs(arr[1].x - arr[0].x) >= Math.abs(arr[1].y - arr[0].y);
     var hL = Math.abs(arr[arr.length - 1].x - arr[arr.length - 2].x) >= Math.abs(arr[arr.length - 1].y - arr[arr.length - 2].y);
-    return orthoRoute(arr, arr, exitAtM(arr[0], h0), exitAtM(arr[arr.length - 1], hL));
+    return orthoRoute(arr, arr, exitAtM(arr[0], h0, lid), exitAtM(arr[arr.length - 1], hL, lid));
   }
   function snapLinkHolders(lid) {
     var m = model, lines = {};
@@ -282,7 +519,7 @@
     });
     var routes = Object.keys(lines).map(function (k) {
       return routeOf(lines[k].sort(function (a, b) { return a.ord - b.ord; })
-        .map(function (p) { return { x: p.x, y: p.y }; }));
+        .map(function (p) { return { x: p.x, y: p.y }; }), lid);
     });
     m.holders.forEach(function (h) {
       if (h.link_id !== lid || h.x == null) return;
@@ -297,19 +534,19 @@
       if (best) { h.x = best.q.x; h.y = best.q.y; }
     });
   }
-  function moveDeviceCore(id, dx, dy, moved) {
+  function moveDeviceCore(id, dx, dy, moved, seen) {
     var m = model;
     function dev(d) {
+      if (seen['dev' + d.id]) return;
+      seen['dev' + d.id] = true;
       d.x += dx; d.y += dy;
       m.connectors.forEach(function (c) { if (c.device_id === d.id) { c.x += dx; c.y += dy; moved.push(c.id); } });
       m.holders.forEach(function (h) { if (h.device_id === d.id) { h.x += dx; h.y += dy; } });
       m.devices.forEach(function (o) { if (o.parent_device_id === d.id) dev(o); });
-      m.links.forEach(function (l) { if (l.parent_device_id === d.id) moveLink(l, dx, dy, moved); });
+      m.links.forEach(function (l) { if (l.parent_device_id === d.id && !seen['link' + l.id]) moveLink(l, dx, dy, moved, seen); });
       m.frames.forEach(function (f) {
         if (f.parent_device_id !== d.id) return;
-        f.x += dx; f.y += dy;
-        if (f.base_y != null) f.base_y += dy;
-        m.holders.forEach(function (h) { if (h.frame_id === f.id) { h.x += dx; h.y += dy; } });
+        moveFrameCore(f.id, dx, dy, seen);
       });
     }
     dev(byId(m.devices)[id]);
@@ -351,7 +588,7 @@
         oldPts.forEach(function (q) { (ls[q.line_no] = ls[q.line_no] || []).push(q); });
         var oldRoutes = Object.keys(ls).map(function (k) {
           return routeOf(ls[k].sort(function (a, b) { return a.ord - b.ord; })
-            .map(function (q) { return { x: q.x, y: q.y }; }));
+            .map(function (q) { return { x: q.x, y: q.y }; }), c.link_id);
         });
         m.holders.forEach(function (h) {
           if (h.link_id !== c.link_id || h.x == null) return;
@@ -373,43 +610,118 @@
       });
     }
   }
+  // Связь не рвётся: конец трассы всегда сидит на своём разъёме. Каскад может
+  // пропустить уже смещённый коннектор стыка — здесь концы трассы доводятся
+  // до своих разъёмов (с соседней вершиной, чтобы отход не отрывался).
+  function glueLinks() {
+    var byLink = {};
+    model.linkPoints.forEach(function (p) { (byLink[p.link_id] = byLink[p.link_id] || []).push(p); });
+    Object.keys(byLink).forEach(function (lid) {
+      var cs = model.connectors.filter(function (c) { return c.link_id === +lid; });
+      if (cs.length !== 2) return;
+      var lines = {};
+      byLink[lid].forEach(function (p) { (lines[p.line_no] = lines[p.line_no] || []).push(p); });
+      var ks = Object.keys(lines);
+      if (ks.length !== 1) return;
+      var arr = lines[ks[0]].sort(function (a, b) { return a.ord - b.ord; });
+      var n = arr.length; if (n < 2) return;
+      var e0 = arr[0], e1 = arr[n - 1];
+      function d(e, c) { return Math.abs(e.x - c.x) + Math.abs(e.y - c.y); }
+      var ab = d(e0, cs[0]) + d(e1, cs[1]);
+      var ba = d(e0, cs[1]) + d(e1, cs[0]);
+      var c0 = ab <= ba ? cs[0] : cs[1], c1 = ab <= ba ? cs[1] : cs[0];
+      [[e0, c0, 1], [e1, c1, n - 2]].forEach(function (pr) {
+        var e = pr[0], c = pr[1];
+        var dx = c.x - e.x, dy = c.y - e.y;
+        if (dx === 0 && dy === 0) return;
+        e.x = c.x; e.y = c.y;
+        if (n > 2) { arr[pr[2]].x += dx; arr[pr[2]].y += dy; }
+      });
+    });
+  }
   function finishMove(touched) {
-    Object.keys(touched).forEach(function (lid) { snapLinkHolders(+lid); });
+    glueLinks();
+    alignDevicePorts(touched);
+    Object.keys(touched).forEach(function (lid) { repairOutside(+lid); snapLinkHolders(+lid); });
+    savePlacement();
     render();
   }
-  function moveDevice(id, dx, dy) {
-    var moved = [], touched = {}, deltas = {};
-    moveDeviceCore(id, dx, dy, moved);
-    moved.forEach(function (cid) { deltas[cid] = { dx: dx, dy: dy }; });
+  // Перемещение объекта: вместе с ним едет всё, что связано парами
+  // Holder↔Holder (Frame, Device, Link) и каскадом Connector↔Connector.
+  function frameSubtree(id) {
+    var ids = {};
+    (function walk(fid) {
+      ids[fid] = true;
+      model.frames.forEach(function (f) { if (f.parent_frame_id === fid) walk(f.id); });
+    })(id);
+    return ids;
+  }
+  function moveFrameCore(id, dx, dy, seen) {
+    if (seen['frame' + id]) return;
+    seen['frame' + id] = true;
+    var f = byId(model.frames)[id];
+    f.x += dx; f.y += dy;
+    if (f.base_y != null) f.base_y += dy;
+    model.holders.forEach(function (h) { if (h.frame_id === id) { h.x += dx; h.y += dy; } });
+    model.frames.forEach(function (child) { if (child.parent_frame_id === id) moveFrameCore(child.id, dx, dy, seen); });
+  }
+  function devSubtree(id) {
+    var ids = {};
+    (function walk(d) {
+      ids[d] = true;
+      model.devices.forEach(function (o) { if (o.parent_device_id === d) walk(o.id); });
+    })(id);
+    return ids;
+  }
+  function holderPairQueue(h, dx, dy, queue) {
+    model.bindings.forEach(function (b) {
+      var oid = b.holder_a_id === h.id ? b.holder_b_id : b.holder_b_id === h.id ? b.holder_a_id : null;
+      if (oid == null) return;
+      var o = byId(model.holders)[oid];
+      if (focusId != null && o.frame_id && !h.frame_id) return;
+      queue.push({ kind: o.device_id ? 'dev' : o.frame_id ? 'frame' : 'link',
+        id: o.device_id || o.frame_id || o.link_id, dx: dx, dy: dy });
+    });
+  }
+  function runQueue(queue, moved, deltas, touched, seen) {
+    var m = model;
+    while (queue.length) {
+      var q = queue.shift(), key = q.kind + q.id;
+      if (seen[key]) continue;
+      var start = moved.length;
+      if (q.kind === 'dev') {
+        moveDeviceCore(q.id, q.dx, q.dy, moved, seen);
+        var sub = devSubtree(q.id);
+        m.holders.forEach(function (h) { if (h.device_id && sub[h.device_id]) holderPairQueue(h, q.dx, q.dy, queue); });
+        var frames = byId(m.frames), links = byId(m.links);
+        m.frames.forEach(function (f) {
+          if (!sub[frameParent(f, frames)]) return;
+          m.holders.forEach(function (h) { if (h.frame_id === f.id) holderPairQueue(h, q.dx, q.dy, queue); });
+        });
+        m.links.forEach(function (l) {
+          if (!sub[linkParent(l, links)]) return;
+          m.holders.forEach(function (h) { if (h.link_id === l.id) holderPairQueue(h, q.dx, q.dy, queue); });
+        });
+      } else if (q.kind === 'frame') {
+        moveFrameCore(q.id, q.dx, q.dy, seen);
+        var subFrames = frameSubtree(q.id);
+        m.holders.forEach(function (h) { if (subFrames[h.frame_id]) holderPairQueue(h, q.dx, q.dy, queue); });
+      } else {
+        moveLink(byId(m.links)[q.id], q.dx, q.dy, moved, seen);
+        touched[q.id] = true;
+        m.holders.forEach(function (h) { if (h.link_id === q.id) holderPairQueue(h, q.dx, q.dy, queue); });
+      }
+      for (var i = start; i < moved.length; i++) deltas[moved[i]] = { dx: q.dx, dy: q.dy };
+    }
+  }
+  function moveWhole(kind, id, dx, dy) {
+    var moved = [], touched = {}, deltas = {}, seen = {};
+    runQueue([{ kind: kind, id: id, dx: dx, dy: dy }], moved, deltas, touched, seen);
     cascadeContacts(moved, deltas, touched);
     finishMove(touched);
   }
-  // Перемещение Frame: вместе с ним едет всё закреплённое на нём —
-  // Device и Link через пары Holder↔Holder, со своим каскадом контактов.
-  function moveFrame(id, dx, dy) {
-    var m = model, moved = [], touched = {}, seen = {};
-    var f = byId(m.frames)[id];
-    f.x += dx; f.y += dy;
-    if (f.base_y != null) f.base_y += dy;
-    var fh = {};
-    m.holders.forEach(function (h) { if (h.frame_id === id) { h.x += dx; h.y += dy; fh[h.id] = true; } });
-    m.bindings.forEach(function (b) {
-      var mine = fh[b.holder_a_id] ? b.holder_a_id : fh[b.holder_b_id] ? b.holder_b_id : null;
-      if (mine == null) return;
-      var h = byId(m.holders)[mine === b.holder_a_id ? b.holder_b_id : b.holder_a_id];
-      var key = (h.device_id ? 'd' : 'l') + (h.device_id || h.link_id);
-      if (seen[key]) return;
-      seen[key] = true;
-      if (h.device_id) moveDeviceCore(h.device_id, dx, dy, moved);
-      else { moveLink(byId(m.links)[h.link_id], dx, dy, moved); touched[h.link_id] = true; }
-    });
-    cascadeContacts(moved, (function () {
-      var dmap = {};
-      moved.forEach(function (cid) { dmap[cid] = { dx: dx, dy: dy }; });
-      return dmap;
-    })(), touched);
-    finishMove(touched);
-  }
+  function moveDevice(id, dx, dy) { moveWhole('dev', id, dx, dy); }
+  function moveFrame(id, dx, dy) { moveWhole('frame', id, dx, dy); }
 
   // Ресайз за ПНУ: якорь — ЛПУ, габарит пишется в d.w/d.h (память сессии);
   // порты и крепления масштабируются пропорционально от старого центра.
@@ -420,6 +732,8 @@
     return {
       kind: 'resize', id: id, cx: cx, cy: cy,
       tl: { x: d.x - old.w / 2, y: d.y - old.h / 2 }, old: old,
+      boundaryHolds: id === focusId ? placementModel.holders.filter(function (h) { return h.device_id === id; })
+        .map(function (h) { return { id: h.id, ox: h.x, oy: h.y }; }) : [],
       ports: model.connectors.filter(function (c) { return c.device_id === id; })
         .map(function (c) { return { id: c.id, ox: c.x - oldC.x, oy: c.y - oldC.y }; }),
       holds: model.holders.filter(function (h) { return h.device_id === id; })
@@ -432,8 +746,15 @@
     var nh = Math.max(30, Math.round(wy / gridStep) * gridStep - drag.tl.y);
     var sx = nw / drag.old.w, sy = nh / drag.old.h;
     var nc = { x: drag.tl.x + nw / 2, y: drag.tl.y + nh / 2 };
+    var outerModel = null, fieldId = focusId, fieldModel = model;
+    if (drag.id === focusId) {
+      focusId = null; loadField(); outerModel = model;
+      model = fieldModel; focusId = fieldId;
+      var parent = byId(placementModel.devices)[drag.id];
+      parent.x += nc.x - d.x; parent.y += nc.y - d.y;
+    }
     d.w = nw; d.h = nh; d.x = nc.x; d.y = nc.y;
-    var moved = [], deltas = {}, touched = {};
+    var moved = [], deltas = {}, touched = {}, seen = {}, queue = [];
     var byIdC = byId(model.connectors), byIdH = byId(model.holders);
     drag.ports.forEach(function (p) {
       var c = byIdC[p.id], nx = nc.x + p.ox * sx, ny = nc.y + p.oy * sy;
@@ -441,16 +762,47 @@
       c.x = nx; c.y = ny; moved.push(p.id);
     });
     drag.holds.forEach(function (p) {
-      var h = byIdH[p.id]; h.x = nc.x + p.ox * sx; h.y = nc.y + p.oy * sy;
+      var h = byIdH[p.id], nx = nc.x + p.ox * sx, ny = nc.y + p.oy * sy;
+      holderPairQueue(h, nx - h.x, ny - h.y, queue);
+      h.x = nx; h.y = ny;
     });
+    seen['dev' + drag.id] = true;
+    runQueue(queue, moved, deltas, touched, seen);
     cascadeContacts(moved, deltas, touched);
     finishMove(touched);
+    if (outerModel) {
+      focusId = null; loadField();
+      var oldC = byId(outerModel.connectors), oldH = byId(outerModel.holders);
+      var cs = byId(model.connectors), hs = byId(model.holders), root = byId(model.devices)[drag.id];
+      var outerTouched = {}, outerQueue = [], outerSeen = {};
+      var sub = devSubtree(drag.id), frames = byId(model.frames), links = byId(model.links);
+      Object.keys(sub).forEach(function (id) { outerSeen['dev' + id] = true; });
+      model.frames.forEach(function (f) { if (sub[frameParent(f, frames)]) outerSeen['frame' + f.id] = true; });
+      model.links.forEach(function (l) { if (sub[linkParent(l, links)]) outerSeen['link' + l.id] = true; });
+      drag.ports.forEach(function (p) {
+        deltas[p.id] = { dx: cs[p.id].x - oldC[p.id].x, dy: cs[p.id].y - oldC[p.id].y };
+      });
+      drag.boundaryHolds.forEach(function (p) {
+        var h = hs[p.id], x = root.x + p.ox * sx, y = root.y + p.oy * sy;
+        holderPairQueue(h, x - oldH[p.id].x, y - oldH[p.id].y, outerQueue);
+        h.x = x; h.y = y;
+      });
+      runQueue(outerQueue, moved, deltas, outerTouched, outerSeen);
+      cascadeContacts(moved, deltas, outerTouched);
+      finishMove(outerTouched);
+      model = fieldModel; focusId = fieldId; render();
+    }
   }
 
   // Сдвиг сегмента трассы перпендикулярно его ориентации: горизонтальный —
   // по вертикали, вертикальный — по горизонтали. Концы-разъёмы (первый и
   // последний stored узел) не двигаются; защитный перпендикулярный отход
   // у разъёма всегда восстанавливает orthoRoute. Углы остаются прямыми.
+  function isCompDev(d) {
+    return model.devices.some(function (o) { return o.parent_device_id === d.id; }) ||
+      model.links.some(function (o) { return o.parent_device_id === d.id; }) ||
+      model.frames.some(function (o) { return o.parent_device_id === d.id; });
+  }
   function segJ(pts, horiz, span) {
     var ax = horiz ? 'x' : 'y';
     for (var k = 1; k < pts.length - 2; k++) {
@@ -497,8 +849,9 @@
     stored.forEach(function (p, idx) {
       model.linkPoints.push({ link_id: drag.link, line_no: drag.line, ord: idx + 1, x: p.x, y: p.y });
     });
-    snapLinkHolders(drag.link);
-    render();
+    var touched = {};
+    touched[drag.link] = true;
+    finishMove(touched);
   }
 
   document.getElementById('scene').addEventListener('pointerdown', function (e) {
@@ -519,12 +872,14 @@
       var wx = (e.clientX - cm0.e) / cm0.a, wy = (e.clientY - cm0.f) / cm0.d;
       var cid = null;
       model.devices.forEach(function (d) {
-        if (d.x == null || !isComp(d)) return;
+        if (d.x == null || d.id === focusId || !isCompDev(d)) return;
         var s = devSizeM(d);
         if (wx >= d.x - s.w / 2 && wx <= d.x + s.w / 2 && wy >= d.y - s.h / 2 && wy <= d.y + s.h / 2) cid = d.id;
       });
       if (cid != null) {
-        drag = { kind: 'dev', id: cid, cx: e.clientX, cy: e.clientY };
+        var cd0 = byId(model.devices)[cid], cs0 = devSizeM(cd0);
+        drag = { kind: 'dev', id: cid, cx: e.clientX, cy: e.clientY,
+          tl0: { x: cd0.x - cs0.w / 2, y: cd0.y - cs0.h / 2 } };
         dragMoved = false;
         e.preventDefault();
         return;
@@ -546,9 +901,15 @@
     var pg = !g && !fg && editMode && e.target.closest('g[data-pdev]');
     var pf = !g && !fg && !pg && editMode && e.target.closest('g[data-pframe]');
     if (g || pg) {
-      drag = { kind: 'dev', id: +(g || pg).getAttribute(g ? 'data-dev' : 'data-pdev'), cx: e.clientX, cy: e.clientY };
+      var did = +(g || pg).getAttribute(g ? 'data-dev' : 'data-pdev');
+      if (did === focusId) return;
+      var dd0 = byId(model.devices)[did], ds0 = devSizeM(dd0);
+      drag = { kind: 'dev', id: did, cx: e.clientX, cy: e.clientY,
+        tl0: { x: dd0.x - ds0.w / 2, y: dd0.y - ds0.h / 2 } };
     } else if (fg || pf) {
-      drag = { kind: 'frame', id: +(fg || pf).getAttribute(fg ? 'data-frame' : 'data-pframe'), cx: e.clientX, cy: e.clientY };
+      var fid = +(fg || pf).getAttribute(fg ? 'data-frame' : 'data-pframe');
+      var ff0 = byId(model.frames)[fid];
+      drag = { kind: 'frame', id: fid, cx: e.clientX, cy: e.clientY, f0: { x: ff0.x, y: ff0.y } };
     } else if (!e.target.closest('.el')) {
       drag = { kind: 'pan', cx: e.clientX, cy: e.clientY };
     } else return;
@@ -585,21 +946,34 @@
     // Масштаб фиксирован (zoom), поэтому px → единицы модели делением на ctm.a/d.
     var ctm = svg.getScreenCTM();
     var dx = (e.clientX - drag.cx) / ctm.a, dy = (e.clientY - drag.cy) / ctm.d;
-    drag.cx = e.clientX; drag.cy = e.clientY;
-    // Магнит к сетке: у Device снапится левый верхний угол, у Frame — вершина.
+    // Магнит к сетке считаем от старта драга (снап смещения, не абсолютной
+    // позиции): иначе при нецелом угле объект прыгает сам по себе и отстаёт.
+    // Точная посадка ЛПУ/вершины на сетку — при отпускании.
     if (drag.kind === 'frame') {
       var f = byId(model.frames)[drag.id];
-      dx = Math.round((f.x + dx) / gridStep) * gridStep - f.x;
-      dy = Math.round((f.y + dy) / gridStep) * gridStep - f.y;
-      moveFrame(drag.id, dx, dy);
+      var ftx = drag.f0.x + Math.round(dx / gridStep) * gridStep;
+      var fty = drag.f0.y + Math.round(dy / gridStep) * gridStep;
+      moveFrame(drag.id, ftx - f.x, fty - f.y);
     } else {
       var d = byId(model.devices)[drag.id], s = devSizeM(d);
-      dx = Math.round((d.x + dx - s.w / 2) / gridStep) * gridStep + s.w / 2 - d.x;
-      dy = Math.round((d.y + dy - s.h / 2) / gridStep) * gridStep + s.h / 2 - d.y;
-      moveDevice(drag.id, dx, dy);
+      var dtx = drag.tl0.x + Math.round(dx / gridStep) * gridStep;
+      var dty = drag.tl0.y + Math.round(dy / gridStep) * gridStep;
+      moveDevice(drag.id, dtx - (d.x - s.w / 2), dty - (d.y - s.h / 2));
     }
   });
   document.addEventListener('pointerup', function () {
+    if (drag && dragMoved && (drag.kind === 'dev' || drag.kind === 'frame')) {
+      if (drag.kind === 'dev') {
+        var d = byId(model.devices)[drag.id], s = devSizeM(d);
+        var tx = Math.round((d.x - s.w / 2) / gridStep) * gridStep + s.w / 2;
+        var ty = Math.round((d.y - s.h / 2) / gridStep) * gridStep + s.h / 2;
+        if (tx !== d.x || ty !== d.y) moveDevice(drag.id, tx - d.x, ty - d.y);
+      } else {
+        var f = byId(model.frames)[drag.id];
+        var fx = Math.round(f.x / gridStep) * gridStep, fy = Math.round(f.y / gridStep) * gridStep;
+        if (fx !== f.x || fy !== f.y) moveFrame(drag.id, fx - f.x, fy - f.y);
+      }
+    }
     drag = null;
     document.getElementById('scene').classList.remove('panning');
   });
@@ -610,7 +984,7 @@
   fetch('/api/model').then(function (r) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
-  }).then(function (m) { model = m; render(); }).catch(function (e) {
+  }).then(function (m) { placementModel = m; loadField(); render(); }).catch(function (e) {
     var scene = document.getElementById('scene');
     scene.innerHTML = '<p id="err"></p>';
     document.getElementById('err').textContent = 'Ошибка загрузки модели: ' + String(e.message || e);
@@ -637,9 +1011,13 @@
         resources = byId(m.resources), connectors = byId(m.connectors), holders = byId(m.holders);
     var compIds = {};
     m.devices.forEach(function (d) {
-      if (m.devices.some(function (o) { return o.parent_device_id === d.id; })) compIds[d.id] = true;
+      if (isCompDev(d)) compIds[d.id] = true;
     });
-    function tOf(id) { return tMap[id] || 0; }
+    function tOf(id) { return id === focusId ? 1 : editMode ? 0 : tMap[id] || 0; }
+    function innerOpacity(id) {
+      if (!id) return 1;
+      return fadeInner(tOf(id)) * innerOpacity(devices[id].parent_device_id);
+    }
     function isComp(d) { return !!compIds[d.id]; }
     function devSize(d) {
       if (!isComp(d)) return { w: d.w || DEV_W, h: d.h || DEV_H, t: 0 };
@@ -687,6 +1065,7 @@
     var boundary = {}, bcHasInner = {};
     Object.keys(compIds).forEach(function (cid) {
       var cd = devices[cid];
+      if (cd.id === focusId) return;
       m.connectors.filter(function (c) { return c.device_id === cd.id; }).forEach(function (bc) {
         var partners = m.connections.filter(function (p) {
           return p.connector_a_id === bc.id || p.connector_b_id === bc.id;
@@ -706,21 +1085,22 @@
     function connOpacity(c) {
       if (c.link_id) {
         var l = links[c.link_id];
-        if (l.parent_device_id) return fadeInner(tOf(l.parent_device_id));
+        var parent = linkParent(l, links);
+        if (parent) return innerOpacity(parent);
         var b = boundary[c.id];
         if (b && b.inner) return 1 - tOf(b.cd.id);
         return 1;
       }
       var o = devices[c.device_id];
-      if (o.parent_device_id) return fadeInner(tOf(o.parent_device_id));
-      if (isComp(o) && bcHasInner[c.id]) return 1 - tOf(o.id);
+      if (o.parent_device_id) return innerOpacity(o.parent_device_id);
+      if (o.id === focusId) return 1;
+      if (isComp(o) && bcHasInner[c.id]) return (1 - tOf(o.id)) * innerOpacity(o.parent_device_id);
       return 1;
     }
     function holdOpacity(h) {
-      if (h.device_id) { var o = devices[h.device_id]; return o.parent_device_id ? fadeInner(tOf(o.parent_device_id)) : 1; }
-      if (h.link_id) { var l = links[h.link_id]; return l.parent_device_id ? fadeInner(tOf(l.parent_device_id)) : 1; }
-      var f = frames[h.frame_id];
-      return f.parent_device_id ? fadeInner(tOf(f.parent_device_id)) : 1;
+      if (h.device_id) { var o = devices[h.device_id]; return o.parent_device_id ? innerOpacity(o.parent_device_id) : 1; }
+      if (h.link_id) return innerOpacity(linkParent(links[h.link_id], links));
+      return innerOpacity(frameParent(frames[h.frame_id], frames));
     }
     function frameGeom(f) {
       var hs = m.holders.filter(function (h) { return h.frame_id === f.id && h.x != null; });
@@ -743,13 +1123,16 @@
       x2 = Math.max(x2, cx + fw / 2 + 6);
       return { x1: x1, x2: x2, y1: y1, y2: y2, labelY: y2 - 5 };
     }
-    // Ось отхода от края Device: нормаль к грани, на которой стоит коннектор.
-    function exitAt(pt, fb) {
+    // Ось и направление отхода от края Device: нормаль к грани, наружу.
+    function exitAt(pt, fb, lid) {
       var c = null;
       m.connectors.forEach(function (cc) { if (cc.device_id && cc.x === pt.x && cc.y === pt.y) c = cc; });
       if (!c) return fb ? 'h' : 'v';
       var d = devices[c.device_id], s = devSize(d);
-      return Math.abs(pt.x - d.x) / (s.w / 2) >= Math.abs(pt.y - d.y) / (s.h / 2) ? 'h' : 'v';
+      var horiz = Math.abs(pt.x - d.x) / (s.w / 2) >= Math.abs(pt.y - d.y) / (s.h / 2);
+      var sg = horiz ? (pt.x >= d.x ? 1 : -1) : (pt.y >= d.y ? 1 : -1);
+      var inside = d.id === focusId || (lid && linkParent(links[lid], links) === d.id);
+      return { a: horiz ? 'h' : 'v', s: inside ? -sg : sg };
     }
     function ownerName(c) {
       if (c.device_id) return devices[c.device_id].name;
@@ -764,29 +1147,38 @@
       return 'Составной Device: внутренняя схема — устройств: ' + nd + ', линков: ' + nl + ', фреймов: ' + nf + '.';
     }
 
-    var L = { containers: [], frames: [], links: [], devices: [], ports: [], labels: [], buttons: [] };
+    var L = { containers: [], frames: [], links: [], devices: [], ports: [], labels: [], buttons: [], contacts: [] };
+    if (focusId != null) m.connections.forEach(function (p) {
+      var a = connectors[p.connector_a_id], b = connectors[p.connector_b_id];
+      if (b.device_id === focusId) { var swap = a; a = b; b = swap; }
+      if (a.device_id !== focusId || !b.device_id || b.device_id === focusId) return;
+      var pts = [connPos(a), connPos(b)];
+      L.contacts.push(orthoRoute(pts, pts, exitAt(pts[0], true), exitAt(pts[1], true)));
+    });
 
     m.devices.forEach(function (d) {
       if (d.x == null || !isComp(d)) return;
+      var op = innerOpacity(d.parent_device_id);
+      if (op < 0.01) return;
       var s = devSize(d);
       L.containers.push({
         d: d, x: d.x - s.w / 2, y: d.y - s.h / 2, w: s.w, h: s.h, t: s.t,
         nameY: lerp(d.y - 3, d.y - s.h / 2 + 18, s.t),
         subY: lerp(d.y + 14, d.y - s.h / 2 + 33, s.t),
-        desc: compDesc(d)
+        desc: compDesc(d), opacity: op
       });
-      L.buttons.push({ id: d.id, x: d.x + s.w / 2 - 14, y: d.y - s.h / 2 + 14, t: s.t });
+      if (d.id !== focusId) L.buttons.push({ id: d.id, x: d.x + s.w / 2 - 14, y: d.y - s.h / 2 + 14, t: s.t, opacity: op });
     });
 
     m.frames.forEach(function (f) {
       if (f.x == null) return;
-      var op = f.parent_device_id ? fadeInner(tOf(f.parent_device_id)) : 1;
+      var op = innerOpacity(frameParent(f, frames));
       if (op < 0.01) return;
       var gm = frameGeom(f);
       var hs = m.holders.filter(function (h) { return h.frame_id === f.id; });
       L.frames.push({
         f: f, x1: gm.x1, y1: gm.y1, x2: gm.x2, y2: gm.y2, labelY: gm.labelY, opacity: op,
-        inner: !!f.parent_device_id,
+        inner: !!frameParent(f, frames),
         desc: 'Несущая конструкция: ресурс не передаёт, коннекторов нет. Креплений (Holder): ' + hs.length + '.'
       });
     });
@@ -794,7 +1186,7 @@
     m.links.forEach(function (l) {
       var pts = m.linkPoints.filter(function (p) { return p.link_id === l.id; });
       if (!pts.length) return;
-      var op = l.parent_device_id ? fadeInner(tOf(l.parent_device_id)) : 1;
+      var op = innerOpacity(linkParent(l, links));
       if (op < 0.01) return;
       var adj = {};
       m.connectors.forEach(function (c) {
@@ -822,10 +1214,16 @@
         if (orig.length > 1) {
           var h0 = Math.abs(orig[1].x - orig[0].x) >= Math.abs(orig[1].y - orig[0].y);
           var hL = Math.abs(orig[orig.length - 1].x - orig[orig.length - 2].x) >= Math.abs(orig[orig.length - 1].y - orig[orig.length - 2].y);
-          arr = orthoRoute(arr, orig, exitAt(orig[0], h0), exitAt(orig[orig.length - 1], hL));
+          arr = orthoRoute(arr, orig, exitAt(orig[0], h0, l.id), exitAt(orig[orig.length - 1], hL, l.id));
         } else {
           arr = orthoRoute(arr, orig);
         }
+        var clean = [];
+        arr.forEach(function (p) {
+          var prev = clean[clean.length - 1];
+          if (!prev || prev.x !== p.x || prev.y !== p.y) clean.push(p);
+        });
+        arr = clean;
         out.push({ pts: arr, ext: ext, line_no: +k });
         for (var i = 1; i < arr.length; i++) {
           var dx = arr[i].x - arr[i - 1].x, dy = arr[i].y - arr[i - 1].y;
@@ -867,7 +1265,7 @@
 
     m.devices.forEach(function (d) {
       if (d.x == null || isComp(d)) return;
-      var op = d.parent_device_id ? fadeInner(tOf(d.parent_device_id)) : 1;
+      var op = d.parent_device_id ? innerOpacity(d.parent_device_id) : 1;
       if (op < 0.01) return;
       var cs = m.connectors.filter(function (c) { return c.device_id === d.id; });
       var hs = m.holders.filter(function (h) { return h.device_id === d.id; });
@@ -961,19 +1359,13 @@
     var m = model;
     var scene = document.getElementById('scene');
     scene.innerHTML = '';
+    document.getElementById('back-btn').hidden = focusId == null;
+    var fieldTitle = focusId == null ? 'DSM — мнемосхема системы (данные из PostgreSQL)' : 'Внутренности составного устройства — ' + byId(m.devices)[focusId].name;
+    document.getElementById('field-title').textContent = fieldTitle;
+    scene.dataset.parentDevice = focusId == null ? '' : String(focusId);
     segRoutes = {};
     var L = buildLayout(anim);
-    var allOnes = {};
-    m.devices.forEach(function (d) {
-      if (m.devices.some(function (o) { return o.parent_device_id === d.id; })) allOnes[d.id] = 1;
-    });
-    var bC = bounds(buildLayout({})), bE = bounds(buildLayout(allOnes));
-    var maxT = 0;
-    Object.keys(anim).forEach(function (k) { maxT = Math.max(maxT, anim[k]); });
-    var vb = {
-      x1: lerp(bC.x1, bE.x1, maxT), x2: lerp(bC.x2, bE.x2, maxT),
-      y1: lerp(bC.y1, bE.y1, maxT), y2: lerp(bC.y2, bE.y2, maxT)
-    };
+    var vb = bounds(L);
     if (!world) {
       var M = 1000;
       world = { x1: vb.x1 - M, y1: vb.y1 - M, x2: vb.x2 + M, y2: vb.y2 + M };
@@ -982,12 +1374,12 @@
     var svg = el('svg', {
       viewBox: world.x1 + ' ' + world.y1 + ' ' + ww + ' ' + wh,
       width: ww * zoom, height: wh * zoom,
-      role: 'img', 'aria-label': 'Мнемосхема системы'
+      role: 'img', 'aria-label': fieldTitle
     });
     scene.appendChild(svg);
     var defs = el('defs', {}, svg);
     var pat = el('pattern', { id: 'grid', width: gridStep, height: gridStep, patternUnits: 'userSpaceOnUse' }, defs);
-    el('circle', { cx: 0, cy: 0, r: 1, fill: 'var(--grid)' }, pat);
+    el('circle', { cx: 0, cy: 0, r: 1.5, fill: 'var(--grid)' }, pat);
     el('rect', { x: world.x1, y: world.y1, width: ww, height: wh, fill: 'url(#grid)', 'class': 'gridbg' }, svg);
     if (!centered) {
       centered = true;
@@ -1024,16 +1416,21 @@
     L.frames.forEach(function (f) { if (!f.inner) drawFrame(f); });
 
     L.containers.forEach(function (c) {
-      var g = el('g', { 'data-dev': c.d.id }, svg);
+      var g = el('g', c.d.id === focusId ? { 'class': 'field-boundary' } : { 'data-dev': c.d.id }, svg);
+      groupOpacity(g, c.opacity);
       el('rect', { x: c.x, y: c.y, width: c.w, height: c.h, rx: 4, 'class': 'dev' }, g);
       txt(g, c.d.x, c.nameY, c.d.name, 'dlabel');
       txt(g, c.d.x, c.subY, 'Device (составной)', 'sub dlabel');
       el('rect', { x: c.x, y: c.y, width: c.w, height: c.h, 'class': 'hit' }, g);
-      clickable(g, 'Device', c.d.name, 'Преобразует, накапливает, отдаёт или регулирует ресурс. ' + c.desc);
-      if (c.t > 0.5) el('rect', { x: c.x + c.w - 5, y: c.y + c.h - 5, width: 10, height: 10, 'class': 'rsz', 'data-rsz': c.d.id }, g);
+      if (c.d.id !== focusId) clickable(g, 'Device', c.d.name, 'Преобразует, накапливает, отдаёт или регулирует ресурс. ' + c.desc);
+      if (c.d.id !== focusId && c.t > 0.5) el('rect', { x: c.x + c.w - 5, y: c.y + c.h - 5, width: 10, height: 10, 'class': 'rsz', 'data-rsz': c.d.id }, g);
     });
 
     L.frames.forEach(function (f) { if (f.inner) drawFrame(f); });
+
+    L.contacts.forEach(function (pts) {
+      el('polyline', { points: pts.map(function (p) { return p.x + ',' + p.y; }).join(' '), 'class': 'link field-boundary' }, svg);
+    });
 
     L.links.forEach(function (l) {
       var g = el('g', {}, svg);
@@ -1104,14 +1501,29 @@
       });
     });
 
+    if (focusId != null) {
+      var root = byId(m.devices)[focusId];
+      el('rect', { x: root.x + (root.w || DEV_W) / 2 - 5, y: root.y + (root.h || DEV_H) / 2 - 5,
+        width: 10, height: 10, 'class': 'rsz', 'data-rsz': root.id }, svg);
+    }
+
     L.buttons.forEach(function (b) {
-      var g = el('g', { 'class': 'xbtn' }, svg);
-      el('rect', { x: b.x - 8, y: b.y - 8, width: 16, height: 16, rx: 3 }, g);
-      el('line', { x1: b.x - 4, y1: b.y, x2: b.x + 4, y2: b.y }, g);
-      if (b.t < 0.5) el('line', { x1: b.x, y1: b.y - 4, x2: b.x, y2: b.y + 4 }, g);
-      var title = el('title', {}, g);
-      title.textContent = b.t < 0.5 ? 'Развернуть внутреннюю схему' : 'Свернуть внутреннюю схему';
-      g.addEventListener('click', function (e) { e.stopPropagation(); toggle(b.id); });
+      var label = editMode ? 'Редактировать внутреннюю схему' : b.t < 0.5 ? 'Развернуть внутреннюю схему' : 'Свернуть внутреннюю схему';
+      var g = el('g', { 'class': 'xbtn', 'data-device': b.id, role: 'button', tabindex: 0, 'aria-label': label }, svg);
+      groupOpacity(g, b.opacity);
+      el('rect', { x: b.x - 9, y: b.y - 9, width: 18, height: 18, rx: 3 }, g);
+      if (editMode) {
+        el('path', { d: 'M ' + (b.x + 2) + ' ' + (b.y - 5) + ' l 3 3 -7 7 -4 1 1 -4 z' }, g);
+      } else {
+        el('line', { x1: b.x - 4, y1: b.y, x2: b.x + 4, y2: b.y }, g);
+        if (b.t < 0.5) el('line', { x1: b.x, y1: b.y - 4, x2: b.x, y2: b.y + 4 }, g);
+      }
+      el('title', {}, g).textContent = label;
+      function activate(e) { e.stopPropagation(); if (editMode) openField(b.id); else toggle(b.id); }
+      g.addEventListener('click', activate);
+      g.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(e); }
+      });
     });
 
     svg.addEventListener('click', function (e) {

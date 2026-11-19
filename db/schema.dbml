@@ -88,5 +88,5 @@ Table placement {
   entity_id integer [not null]
   geom jsonb [not null]
 
-  Note: 'Размещение сущности в представлении. Универсальная ссылка (entity_type + entity_id) без FK на логические таблицы; UNIQUE (view_id, entity_type, entity_id). geom: 2D {x, y[, w, h][, base_y]}, трасса Link {lines: [{line_no, points}]}'
+  Note: 'Размещение сущности в представлении. Универсальная ссылка (entity_type + entity_id) без FK на логические таблицы; UNIQUE (view_id, entity_type, entity_id). geom: 2D {x, y[, w, h][, base_y]}, трасса Link {lines: [{line_no, points}]}. Внутренние Device/Frame/Link — относительно родителя, порты Device/Frame — относительно владельца, порты Link — в координатах трассы'
 }
