@@ -1,263 +1,302 @@
--- Схема ядра DSM (учебная, только текущие сущности).
--- Логика: сущности и связи, без координат.
--- Сущности: Device, Link, Frame, Resource, Connector, Holder.
--- Связи: ресурсное соединение = пара Connector↔Connector;
---        механическая привязка = пара Holder↔Holder;
---        составность через parent-ссылки.
--- Представление: view (реестр представлений) + placement (размещение сущностей
--- в конкретном представлении, геометрия в jsonb). Добавление нового
--- представления (3D и пр.) не меняет логические таблицы.
+-- Схема ядра DSM: логика без координат; размещение — отдельный слой.
+\set ON_ERROR_STOP on
+BEGIN;
 
 CREATE TABLE resource (
     id   integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name text NOT NULL UNIQUE
 );
-COMMENT ON TABLE resource IS 'Профиль ресурса; один экземпляр на профиль во всей модели (вода, электричество 230В, данные DALI…)';
+COMMENT ON TABLE resource IS 'Профиль ресурса; один экземпляр на профиль во всей модели';
 
-CREATE TABLE device (
-    id               integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    name             text NOT NULL,
-    parent_device_id integer REFERENCES device(id)
-);
-COMMENT ON TABLE device IS 'Устройство: преобразует, накапливает, отдаёт или регулирует ресурс. Составное Device содержит внутреннюю схему (Device + Link + Frame). Размещение — в placement';
-
-CREATE TABLE link (
-    id               integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    name             text NOT NULL,
-    resource_id      integer REFERENCES resource(id),
-    parent_device_id integer REFERENCES device(id),
-    parent_link_id   integer REFERENCES link(id)
-);
-COMMENT ON TABLE link IS 'Соединение: пассивно передаёт ресурс без изменения его вида. Составной Link (кабель → жилы); может входить в состав Device. Трасса — в placement';
-
-CREATE TABLE frame (
-    id               integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    name             text NOT NULL,
-    parent_device_id integer REFERENCES device(id),
-    parent_frame_id  integer REFERENCES frame(id)
-);
-COMMENT ON TABLE frame IS 'Несущая конструкция: ресурс не передаёт, коннекторов нет. Размещение — в placement';
-
-CREATE TABLE connector (
-    id          integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    name        text NOT NULL,
-    device_id   integer REFERENCES device(id),
-    link_id     integer REFERENCES link(id),
-    resource_id integer REFERENCES resource(id),
-    CONSTRAINT connector_one_owner CHECK (
-        (device_id IS NOT NULL)::int + (link_id IS NOT NULL)::int = 1
-    )
-);
-COMMENT ON TABLE connector IS 'Разъём: точка входа/выхода/промежуточного подключения ресурса. Принадлежит Device или Link. Позиция — в placement';
-
-CREATE TABLE holder (
+CREATE TABLE unit (
     id        integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name      text NOT NULL,
-    device_id integer REFERENCES device(id),
-    link_id   integer REFERENCES link(id),
-    frame_id  integer REFERENCES frame(id),
-    CONSTRAINT holder_one_owner CHECK (
-        (device_id IS NOT NULL)::int + (link_id IS NOT NULL)::int + (frame_id IS NOT NULL)::int = 1
-    )
+    kind      text NOT NULL CHECK (kind IN ('unit', 'device', 'link')),
+    parent_id integer REFERENCES unit(id),
+    CONSTRAINT unit_not_self_parent CHECK (parent_id <> id)
 );
-COMMENT ON TABLE holder IS 'Крепление: деталь или зона механического контакта. Принадлежит Device, Link или Frame. Позиция — в placement';
+CREATE INDEX unit_parent_idx ON unit(parent_id);
+COMMENT ON TABLE unit IS 'Материальная сущность. kind — конкретная специализация; базовый Unit не имеет Component. Единый состав через parent_id';
+
+CREATE TABLE component (
+    id integer PRIMARY KEY REFERENCES unit(id)
+);
+COMMENT ON TABLE component IS 'Общий уровень Device и Link с тем же идентификатором Unit; владелец Connector';
+
+CREATE TABLE device (
+    id integer PRIMARY KEY REFERENCES component(id)
+);
+COMMENT ON TABLE device IS 'Устройство: преобразует, накапливает, отдаёт или регулирует ресурс';
+
+CREATE TABLE link (
+    id          integer PRIMARY KEY REFERENCES component(id),
+    resource_id integer REFERENCES resource(id)
+);
+COMMENT ON TABLE link IS 'Соединение: пассивно передаёт ресурс. Составной Link содержит только Link; минимальное число коннекторов не ограничено';
+
+-- Общая блокировка сериализует изменения графа. При старом снимке проверка небезопасна.
+CREATE FUNCTION lock_unit_graph() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'TRUNCATE' THEN
+        RAISE EXCEPTION 'TRUNCATE нарушает проверку специализаций; используйте DELETE'
+            USING ERRCODE = '23514';
+    END IF;
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'Изменение Unit/Component/Device/Link требует READ COMMITTED'
+            USING ERRCODE = '0A000';
+    END IF;
+    PERFORM pg_advisory_xact_lock(1146309937, 1);
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER unit_graph_lock BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON unit
+    FOR EACH STATEMENT EXECUTE FUNCTION lock_unit_graph();
+CREATE TRIGGER component_graph_lock BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON component
+    FOR EACH STATEMENT EXECUTE FUNCTION lock_unit_graph();
+CREATE TRIGGER device_graph_lock BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON device
+    FOR EACH STATEMENT EXECUTE FUNCTION lock_unit_graph();
+CREATE TRIGGER link_graph_lock BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON link
+    FOR EACH STATEMENT EXECUTE FUNCTION lock_unit_graph();
+
+CREATE FUNCTION check_unit(p_id integer) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    u unit%ROWTYPE;
+    has_component boolean;
+    has_device boolean;
+    has_link boolean;
+BEGIN
+    SELECT * INTO u FROM unit WHERE id = p_id;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    SELECT EXISTS (SELECT 1 FROM component WHERE id = p_id),
+           EXISTS (SELECT 1 FROM device WHERE id = p_id),
+           EXISTS (SELECT 1 FROM link WHERE id = p_id)
+      INTO has_component, has_device, has_link;
+    IF has_component <> (u.kind IN ('device', 'link'))
+       OR has_device <> (u.kind = 'device') OR has_link <> (u.kind = 'link') THEN
+        RAISE EXCEPTION 'Unit %: kind % не соответствует таблицам специализации', p_id, u.kind
+            USING ERRCODE = '23514';
+    END IF;
+    -- Проверяются обе стороны ребра, в том числе при смене kind родителя.
+    IF EXISTS (
+        SELECT 1 FROM unit child JOIN unit parent ON parent.id = child.parent_id
+        WHERE (child.id = p_id OR parent.id = p_id)
+          AND NOT (parent.kind = 'device' OR parent.kind = child.kind)
+    ) THEN
+        RAISE EXCEPTION 'Unit %: недопустимый состав', p_id USING ERRCODE = '23514';
+    END IF;
+    IF EXISTS (
+        WITH RECURSIVE ancestors(id) AS (
+            SELECT parent_id FROM unit WHERE id = p_id AND parent_id IS NOT NULL
+            UNION
+            SELECT parent.parent_id FROM unit parent JOIN ancestors a ON parent.id = a.id
+            WHERE parent.parent_id IS NOT NULL
+        )
+        SELECT 1 FROM ancestors WHERE id = p_id
+    ) THEN
+        RAISE EXCEPTION 'Unit %: цикл в составе', p_id USING ERRCODE = '23514';
+    END IF;
+END;
+$$;
+
+CREATE FUNCTION check_unit_specialization() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP <> 'INSERT' THEN
+        PERFORM check_unit(OLD.id);
+    END IF;
+    IF TG_OP <> 'DELETE' THEN
+        PERFORM check_unit(NEW.id);
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER unit_specialization_check AFTER INSERT OR UPDATE OR DELETE ON unit
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_unit_specialization();
+CREATE CONSTRAINT TRIGGER component_specialization_check AFTER INSERT OR UPDATE OR DELETE ON component
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_unit_specialization();
+CREATE CONSTRAINT TRIGGER device_specialization_check AFTER INSERT OR UPDATE OR DELETE ON device
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_unit_specialization();
+CREATE CONSTRAINT TRIGGER link_specialization_check AFTER INSERT OR UPDATE OR DELETE ON link
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_unit_specialization();
+
+CREATE TABLE connector (
+    id           integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name         text NOT NULL,
+    component_id integer NOT NULL REFERENCES component(id),
+    resource_id  integer REFERENCES resource(id)
+);
+COMMENT ON TABLE connector IS 'Разъём: точка подключения ресурса. Ровно один владелец Component. Позиция — в placement';
+
+CREATE TABLE holder (
+    id      integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name    text NOT NULL,
+    unit_id integer NOT NULL REFERENCES unit(id)
+);
+COMMENT ON TABLE holder IS 'Крепление: деталь или зона механического контакта. Ровно один владелец Unit. Позиция — в placement';
 
 CREATE TABLE connector_plug (
-    id            integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id             integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     connector_a_id integer NOT NULL REFERENCES connector(id),
     connector_b_id integer NOT NULL REFERENCES connector(id),
     CONSTRAINT connector_plug_distinct CHECK (connector_a_id < connector_b_id),
     CONSTRAINT connector_plug_pair_unique UNIQUE (connector_a_id, connector_b_id)
 );
-COMMENT ON TABLE connector_plug IS 'Ресурсное соединение: пара Connector↔Connector (через Link или прямой контакт Device — рисуется слитно)';
+COMMENT ON TABLE connector_plug IS 'Ресурсное соединение: пара Connector↔Connector';
 
 CREATE TABLE holder_plug (
-    id         integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id          integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     holder_a_id integer NOT NULL REFERENCES holder(id),
     holder_b_id integer NOT NULL REFERENCES holder(id),
     CONSTRAINT holder_plug_distinct CHECK (holder_a_id < holder_b_id),
     CONSTRAINT holder_plug_pair_unique UNIQUE (holder_a_id, holder_b_id)
 );
-COMMENT ON TABLE holder_plug IS 'Механическая привязка: пара Holder↔Holder (контакт объекта с Frame)';
-
--- Слой представления.
+COMMENT ON TABLE holder_plug IS 'Механическая привязка: пара Holder↔Holder любых Unit';
 
 CREATE TABLE view (
     id   integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name text NOT NULL UNIQUE
 );
-COMMENT ON TABLE view IS 'Представление модели: мнемосхема 2D, 3D и пр. Новое представление — новая запись, логическая схема не меняется';
+COMMENT ON TABLE view IS 'Представление модели: мнемосхема 2D, 3D и пр.';
 
 CREATE TABLE placement (
     id          integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     view_id     integer NOT NULL REFERENCES view(id),
-    entity_type text NOT NULL,
+    entity_type text NOT NULL CHECK (entity_type IN ('unit', 'connector', 'holder')),
     entity_id   integer NOT NULL,
     geom        jsonb NOT NULL,
     CONSTRAINT placement_unique UNIQUE (view_id, entity_type, entity_id)
 );
-COMMENT ON TABLE placement IS 'Размещение сущности в представлении. Универсальная ссылка (entity_type + entity_id) без FK на логические таблицы; geom — геометрия конкретного вида: 2D {x, y[, w, h][, base_y]}, трасса Link {lines: [{line_no, points: [[x, y], …]}]}, 3D — свой формат. В 2D внутренние Device/Frame/Link — относительно родителя, порты Device/Frame — относительно владельца, порты Link — в координатах трассы';
+COMMENT ON TABLE placement IS 'Универсальная ссылка без FK: unit для всех Unit/Device/Link, connector, holder. geom: Device {x,y,w,h}, базовый Unit {x,y,base_y}, Link {lines:[{line_no,points}]}. Device — относительно родительского Device, базовый Unit — непосредственного родителя, Link — ближайшего Device-предка (Link не задаёт начало координат); порты Link — в координатах трассы, остальные порты — относительно владельца';
 
--- Начальные данные: пример «ТП — шкаф (автомат, счётчик, контроллер, контактор) — два светильника на опорах».
--- Шкаф — составной Device. Два варианта вывода на границу (§5 ядра):
---   ввод: граничный коннектор шкафа связан прямой парой connector_plug с коннектором автомата;
---   выход: граничный коннектор шкафа принадлежит самому шкафу, к нему идёт внутренний Link от контактора.
+-- Пример «ТП — шкаф (автомат, счётчик, контроллер, контактор) — два светильника на опорах».
+INSERT INTO resource (name) VALUES ('электричество 230В'), ('данные DALI'), ('вода');
 
-INSERT INTO resource (name) VALUES
-    ('электричество 230В'),
-    ('данные DALI'),
-    ('вода');
+INSERT INTO unit (name, kind, parent_id) VALUES
+    ('Шкаф', 'device', NULL),
+    ('Светильник 1', 'device', NULL),
+    ('Светильник 2', 'device', NULL),
+    ('Автомат', 'device', 1),
+    ('Счётчик', 'device', 1),
+    ('Контроллер', 'device', 1),
+    ('Контактор', 'device', 1),
+    ('ТП', 'device', NULL),
+    ('Фундамент шкафа', 'unit', NULL),
+    ('Опора 1', 'unit', NULL),
+    ('Опора 2', 'unit', NULL),
+    ('Монтажная панель', 'unit', 1),
+    ('Кабель от ТП', 'link', NULL),
+    ('Кабель освещения', 'link', NULL),
+    ('Секция: шкаф — стык', 'link', 14),
+    ('Секция: стык — светильник 1', 'link', 14),
+    ('Секция: стык — светильник 2', 'link', 14),
+    ('Автомат — счётчик', 'link', 1),
+    ('Счётчик — контактор (силовая)', 'link', 1),
+    ('Счётчик — контроллер (питание)', 'link', 1),
+    ('Цепь управления контактором', 'link', 1),
+    ('Контактор — выход шкафа', 'link', 1);
+INSERT INTO component (id) SELECT id FROM unit WHERE kind IN ('device', 'link');
+INSERT INTO device (id) SELECT id FROM unit WHERE kind = 'device';
+INSERT INTO link (id, resource_id) SELECT id, 1 FROM unit WHERE kind = 'link';
 
-INSERT INTO device (name, parent_device_id) VALUES
-    ('Шкаф',         NULL),
-    ('Светильник 1', NULL),
-    ('Светильник 2', NULL),
-    ('Автомат',      1),
-    ('Счётчик',      1),
-    ('Контроллер',   1),
-    ('Контактор',    1),
-    ('ТП',           NULL);
+INSERT INTO connector (name, component_id, resource_id) VALUES
+    ('Ввод питания шкафа', 1, 1),
+    ('Выход шкафа на освещение', 1, 1),
+    ('Выход ТП', 8, 1),
+    ('Начало кабеля от ТП', 13, 1),
+    ('Конец кабеля от ТП', 13, 1),
+    ('Ввод автомата', 4, 1),
+    ('Выход автомата', 4, 1),
+    ('Ввод счётчика', 5, 1),
+    ('Выход счётчика на контактор', 5, 1),
+    ('Выход счётчика на контроллер', 5, 1),
+    ('Ввод питания контроллера', 6, 1),
+    ('Выход управления контроллера', 6, 1),
+    ('Силовой ввод контактора', 7, 1),
+    ('Вход управления контактора', 7, 1),
+    ('Силовой выход контактора', 7, 1),
+    ('Начало: автомат — счётчик', 18, 1),
+    ('Конец: автомат — счётчик', 18, 1),
+    ('Начало: счётчик — контактор', 19, 1),
+    ('Конец: счётчик — контактор', 19, 1),
+    ('Начало: счётчик — контроллер', 20, 1),
+    ('Конец: счётчик — контроллер', 20, 1),
+    ('Начало цепи управления', 21, 1),
+    ('Конец цепи управления', 21, 1),
+    ('Начало секции от шкафа', 15, 1),
+    ('Конец секции от шкафа (стык)', 15, 1),
+    ('Начало отвода к светильнику 1', 16, 1),
+    ('Конец отвода к светильнику 1', 16, 1),
+    ('Начало отвода к светильнику 2', 17, 1),
+    ('Конец отвода к светильнику 2', 17, 1),
+    ('Ввод светильника 1', 2, 1),
+    ('Ввод светильника 2', 3, 1),
+    ('Начало: контактор — выход шкафа', 22, 1),
+    ('Конец: контактор — выход шкафа', 22, 1);
 
-INSERT INTO frame (name, parent_device_id) VALUES
-    ('Фундамент шкафа',   NULL),
-    ('Опора 1',           NULL),
-    ('Опора 2',           NULL),
-    ('Монтажная панель',  1);
-
-INSERT INTO link (name, resource_id, parent_device_id, parent_link_id) VALUES
-    ('Кабель от ТП',                    1, NULL, NULL),
-    ('Кабель освещения',                1, NULL, NULL),
-    ('Секция: шкаф — стык',             1, NULL, 2),
-    ('Секция: стык — светильник 1',     1, NULL, 2),
-    ('Секция: стык — светильник 2',     1, NULL, 2),
-    ('Автомат — счётчик',               1, 1,    NULL),
-    ('Счётчик — контактор (силовая)',   1, 1,    NULL),
-    ('Счётчик — контроллер (питание)',  1, 1,    NULL),
-    ('Цепь управления контактором',     1, 1,    NULL),
-    ('Контактор — выход шкафа',         1, 1,    NULL);
-
-INSERT INTO connector (name, device_id, link_id, resource_id) VALUES
-    ('Ввод питания шкафа',              1,    NULL, 1),
-    ('Выход шкафа на освещение',        1,    NULL, 1),
-    ('Выход ТП',                        8,    NULL, 1),
-    ('Начало кабеля от ТП',             NULL, 1,    1),
-    ('Конец кабеля от ТП',              NULL, 1,    1),
-    ('Ввод автомата',                   4,    NULL, 1),
-    ('Выход автомата',                  4,    NULL, 1),
-    ('Ввод счётчика',                   5,    NULL, 1),
-    ('Выход счётчика на контактор',     5,    NULL, 1),
-    ('Выход счётчика на контроллер',    5,    NULL, 1),
-    ('Ввод питания контроллера',        6,    NULL, 1),
-    ('Выход управления контроллера',    6,    NULL, 1),
-    ('Силовой ввод контактора',         7,    NULL, 1),
-    ('Вход управления контактора',      7,    NULL, 1),
-    ('Силовой выход контактора',        7,    NULL, 1),
-    ('Начало: автомат — счётчик',       NULL, 6,    1),
-    ('Конец: автомат — счётчик',        NULL, 6,    1),
-    ('Начало: счётчик — контактор',     NULL, 7,    1),
-    ('Конец: счётчик — контактор',      NULL, 7,    1),
-    ('Начало: счётчик — контроллер',    NULL, 8,    1),
-    ('Конец: счётчик — контроллер',     NULL, 8,    1),
-    ('Начало цепи управления',          NULL, 9,    1),
-    ('Конец цепи управления',           NULL, 9,    1),
-    ('Начало секции от шкафа',          NULL, 3,    1),
-    ('Конец секции от шкафа (стык)',    NULL, 3,    1),
-    ('Начало отвода к светильнику 1',   NULL, 4,    1),
-    ('Конец отвода к светильнику 1',    NULL, 4,    1),
-    ('Начало отвода к светильнику 2',   NULL, 5,    1),
-    ('Конец отвода к светильнику 2',    NULL, 5,    1),
-    ('Ввод светильника 1',              2,    NULL, 1),
-    ('Ввод светильника 2',              3,    NULL, 1),
-    ('Начало: контактор — выход шкафа', NULL, 10,   1),
-    ('Конец: контактор — выход шкафа',  NULL, 10,   1);
-
-INSERT INTO holder (name, device_id, link_id, frame_id) VALUES
-    ('Крепление шкафа',              1,    NULL, NULL),
-    ('Крепление фундамента',         NULL, NULL, 1),
-    ('Крепление светильника 1',      2,    NULL, NULL),
-    ('Крепление опоры 1 (свет)',     NULL, NULL, 2),
-    ('Крепление кабеля',             NULL, 4,    NULL),
-    ('Крепление опоры 1 (кабель)',   NULL, NULL, 2),
-    ('Крепление светильника 2',      3,    NULL, NULL),
-    ('Крепление опоры 2',            NULL, NULL, 3),
-    ('Крепление автомата',           4,    NULL, NULL),
-    ('Крепление счётчика',           5,    NULL, NULL),
-    ('Крепление контроллера',        6,    NULL, NULL),
-    ('Крепление контактора',         7,    NULL, NULL),
-    ('Панель: крепление автомата',   NULL, NULL, 4),
-    ('Панель: крепление счётчика',   NULL, NULL, 4),
-    ('Панель: крепление контроллера',NULL, NULL, 4),
-    ('Панель: крепление контактора', NULL, NULL, 4);
+INSERT INTO holder (name, unit_id) VALUES
+    ('Крепление шкафа', 1),
+    ('Крепление фундамента', 9),
+    ('Крепление светильника 1', 2),
+    ('Крепление опоры 1 (свет)', 10),
+    ('Крепление кабеля', 16),
+    ('Крепление опоры 1 (кабель)', 10),
+    ('Крепление светильника 2', 3),
+    ('Крепление опоры 2', 11),
+    ('Крепление автомата', 4),
+    ('Крепление счётчика', 5),
+    ('Крепление контроллера', 6),
+    ('Крепление контактора', 7),
+    ('Панель: крепление автомата', 12),
+    ('Панель: крепление счётчика', 12),
+    ('Панель: крепление контроллера', 12),
+    ('Панель: крепление контактора', 12);
 
 INSERT INTO connector_plug (connector_a_id, connector_b_id) VALUES
-    (3, 4),    -- ТП ↔ начало кабеля от ТП
-    (1, 5),    -- ввод шкафа ↔ конец кабеля от ТП
-    (1, 6),    -- ввод шкафа ↔ ввод автомата (вывод на границу)
-    (7, 16),
-    (8, 17),
-    (9, 18),
-    (13, 19),
-    (10, 20),
-    (11, 21),
-    (12, 22),
-    (14, 23),
-    (15, 32),  -- силовой выход контактора ↔ начало внутреннего линка к границе
-    (2, 33),   -- выход шкафа ↔ конец внутреннего линка (разъём на самом шкафу)
-    (2, 24),   -- выход шкафа ↔ начало секции от шкафа
-    (25, 26),  -- стык секций
-    (25, 28),  -- стык секций
-    (27, 30),
-    (29, 31);
-
+    (3, 4), (1, 5), (1, 6), (7, 16), (8, 17), (9, 18), (13, 19), (10, 20),
+    (11, 21), (12, 22), (14, 23), (15, 32), (2, 33), (2, 24), (25, 26),
+    (25, 28), (27, 30), (29, 31);
 INSERT INTO holder_plug (holder_a_id, holder_b_id) VALUES
-    (1, 2),
-    (3, 4),
-    (5, 6),
-    (7, 8),
-    (9, 13),
-    (10, 14),
-    (11, 15),
-    (12, 16);
-
--- Размещение для представления «Мнемосхема 2D».
+    (1, 2), (3, 4), (5, 6), (7, 8), (9, 13), (10, 14), (11, 15), (12, 16);
 
 INSERT INTO view (name) VALUES ('Мнемосхема 2D');
-
 INSERT INTO placement (view_id, entity_type, entity_id, geom) VALUES
-    -- Device: точка; w, h — габарит составного Device.
-    (1, 'device', 1, '{"x": 360, "y": 185, "w": 380, "h": 300}'),
-    (1, 'device', 2, '{"x": 700, "y": 80}'),
-    (1, 'device', 3, '{"x": 980, "y": 80}'),
-    (1, 'device', 4, '{"x": 280, "y": 120}'),
-    (1, 'device', 5, '{"x": 440, "y": 120}'),
-    (1, 'device', 6, '{"x": 280, "y": 250}'),
-    (1, 'device', 7, '{"x": 440, "y": 250}'),
-    (1, 'device', 8, '{"x": 60, "y": 120}'),
-    -- Frame: (x, y) — вершина, base_y — уровень основания.
-    (1, 'frame', 1, '{"x": 360, "y": 335, "base_y": 400}'),
-    (1, 'frame', 2, '{"x": 700, "y": 108, "base_y": 400}'),
-    (1, 'frame', 3, '{"x": 980, "y": 108, "base_y": 400}'),
-    (1, 'frame', 4, '{"x": 360, "y": 290, "base_y": 310}'),
-    -- Link: трасса; line_no — ветвь, points — точки по порядку.
-    (1, 'link', 1,  '{"lines": [{"line_no": 1, "points": [[120, 120], [170, 120]]}]}'),
-    (1, 'link', 3,  '{"lines": [{"line_no": 1, "points": [[550, 250], [840, 250]]}]}'),
-    (1, 'link', 4,  '{"lines": [{"line_no": 1, "points": [[840, 250], [700, 250], [700, 105]]}]}'),
-    (1, 'link', 5,  '{"lines": [{"line_no": 1, "points": [[840, 250], [980, 250], [980, 105]]}]}'),
-    (1, 'link', 6,  '{"lines": [{"line_no": 1, "points": [[340, 120], [380, 120]]}]}'),
-    (1, 'link', 7,  '{"lines": [{"line_no": 1, "points": [[440, 145], [440, 225]]}]}'),
-    (1, 'link', 8,  '{"lines": [{"line_no": 1, "points": [[400, 145], [400, 185], [280, 185], [280, 225]]}]}'),
-    (1, 'link', 9,  '{"lines": [{"line_no": 1, "points": [[340, 250], [380, 250]]}]}'),
-    (1, 'link', 10, '{"lines": [{"line_no": 1, "points": [[500, 250], [550, 250]]}]}'),
+    -- Device.
+    (1, 'unit', 1, '{"x": 360, "y": 185, "w": 380, "h": 300}'),
+    (1, 'unit', 2, '{"x": 700, "y": 80}'),
+    (1, 'unit', 3, '{"x": 980, "y": 80}'),
+    (1, 'unit', 4, '{"x": 280, "y": 120}'),
+    (1, 'unit', 5, '{"x": 440, "y": 120}'),
+    (1, 'unit', 6, '{"x": 280, "y": 250}'),
+    (1, 'unit', 7, '{"x": 440, "y": 250}'),
+    (1, 'unit', 8, '{"x": 60, "y": 120}'),
+    -- Базовый Unit.
+    (1, 'unit', 9, '{"x": 360, "y": 335, "base_y": 400}'),
+    (1, 'unit', 10, '{"x": 700, "y": 108, "base_y": 400}'),
+    (1, 'unit', 11, '{"x": 980, "y": 108, "base_y": 400}'),
+    (1, 'unit', 12, '{"x": 360, "y": 290, "base_y": 310}'),
+    -- Link: трасса; составной кабель не имеет собственных портов и трассы.
+    (1, 'unit', 13, '{"lines": [{"line_no": 1, "points": [[120, 120], [170, 120]]}]}'),
+    (1, 'unit', 15, '{"lines": [{"line_no": 1, "points": [[550, 250], [840, 250]]}]}'),
+    (1, 'unit', 16, '{"lines": [{"line_no": 1, "points": [[840, 250], [700, 250], [700, 105]]}]}'),
+    (1, 'unit', 17, '{"lines": [{"line_no": 1, "points": [[840, 250], [980, 250], [980, 105]]}]}'),
+    (1, 'unit', 18, '{"lines": [{"line_no": 1, "points": [[340, 120], [380, 120]]}]}'),
+    (1, 'unit', 19, '{"lines": [{"line_no": 1, "points": [[440, 145], [440, 225]]}]}'),
+    (1, 'unit', 20, '{"lines": [{"line_no": 1, "points": [[400, 145], [400, 185], [280, 185], [280, 225]]}]}'),
+    (1, 'unit', 21, '{"lines": [{"line_no": 1, "points": [[340, 250], [380, 250]]}]}'),
+    (1, 'unit', 22, '{"lines": [{"line_no": 1, "points": [[500, 250], [550, 250]]}]}'),
     -- Connector.
-    (1, 'connector', 1,  '{"x": 170, "y": 120}'),
-    (1, 'connector', 2,  '{"x": 550, "y": 250}'),
-    (1, 'connector', 3,  '{"x": 120, "y": 120}'),
-    (1, 'connector', 4,  '{"x": 120, "y": 120}'),
-    (1, 'connector', 5,  '{"x": 170, "y": 120}'),
-    (1, 'connector', 6,  '{"x": 220, "y": 120}'),
-    (1, 'connector', 7,  '{"x": 340, "y": 120}'),
-    (1, 'connector', 8,  '{"x": 380, "y": 120}'),
-    (1, 'connector', 9,  '{"x": 440, "y": 145}'),
+    (1, 'connector', 1, '{"x": 170, "y": 120}'),
+    (1, 'connector', 2, '{"x": 550, "y": 250}'),
+    (1, 'connector', 3, '{"x": 120, "y": 120}'),
+    (1, 'connector', 4, '{"x": 120, "y": 120}'),
+    (1, 'connector', 5, '{"x": 170, "y": 120}'),
+    (1, 'connector', 6, '{"x": 220, "y": 120}'),
+    (1, 'connector', 7, '{"x": 340, "y": 120}'),
+    (1, 'connector', 8, '{"x": 380, "y": 120}'),
+    (1, 'connector', 9, '{"x": 440, "y": 145}'),
     (1, 'connector', 10, '{"x": 400, "y": 145}'),
     (1, 'connector', 11, '{"x": 280, "y": 225}'),
     (1, 'connector', 12, '{"x": 340, "y": 250}'),
@@ -283,15 +322,15 @@ INSERT INTO placement (view_id, entity_type, entity_id, geom) VALUES
     (1, 'connector', 32, '{"x": 500, "y": 250}'),
     (1, 'connector', 33, '{"x": 550, "y": 250}'),
     -- Holder.
-    (1, 'holder', 1,  '{"x": 360, "y": 335}'),
-    (1, 'holder', 2,  '{"x": 360, "y": 335}'),
-    (1, 'holder', 3,  '{"x": 740, "y": 105}'),
-    (1, 'holder', 4,  '{"x": 740, "y": 105}'),
-    (1, 'holder', 5,  '{"x": 700, "y": 180}'),
-    (1, 'holder', 6,  '{"x": 700, "y": 180}'),
-    (1, 'holder', 7,  '{"x": 1020, "y": 105}'),
-    (1, 'holder', 8,  '{"x": 1020, "y": 105}'),
-    (1, 'holder', 9,  '{"x": 280, "y": 145}'),
+    (1, 'holder', 1, '{"x": 360, "y": 335}'),
+    (1, 'holder', 2, '{"x": 360, "y": 335}'),
+    (1, 'holder', 3, '{"x": 740, "y": 105}'),
+    (1, 'holder', 4, '{"x": 740, "y": 105}'),
+    (1, 'holder', 5, '{"x": 700, "y": 180}'),
+    (1, 'holder', 6, '{"x": 700, "y": 180}'),
+    (1, 'holder', 7, '{"x": 1020, "y": 105}'),
+    (1, 'holder', 8, '{"x": 1020, "y": 105}'),
+    (1, 'holder', 9, '{"x": 280, "y": 145}'),
     (1, 'holder', 10, '{"x": 480, "y": 145}'),
     (1, 'holder', 11, '{"x": 280, "y": 275}'),
     (1, 'holder', 12, '{"x": 440, "y": 275}'),
@@ -300,32 +339,29 @@ INSERT INTO placement (view_id, entity_type, entity_id, geom) VALUES
     (1, 'holder', 15, '{"x": 280, "y": 275}'),
     (1, 'holder', 16, '{"x": 440, "y": 275}');
 
--- Перевод исходного абсолютного размещения в координаты родителя/владельца.
+-- Только seed: перевод исходного абсолютного размещения в прежние локальные координаты.
 WITH RECURSIVE link_owner AS (
-    SELECT id, parent_device_id FROM link WHERE parent_link_id IS NULL
+    SELECT u.id, u.parent_id AS device_id FROM unit u
+    LEFT JOIN unit p ON p.id = u.parent_id
+    WHERE u.kind = 'link' AND (p.id IS NULL OR p.kind = 'device')
     UNION ALL
-    SELECT l.id, COALESCE(l.parent_device_id, p.parent_device_id)
-    FROM link l JOIN link_owner p ON p.id = l.parent_link_id
+    SELECT u.id, p.device_id FROM unit u JOIN link_owner p ON p.id = u.parent_id
+    WHERE u.kind = 'link'
 ), owners AS (
-    SELECT 'device' AS entity_type, id AS entity_id,
-           'device' AS origin_type, parent_device_id AS origin_id FROM device
+    SELECT 'unit' AS entity_type, u.id AS entity_id,
+           CASE WHEN u.kind = 'link' THEN l.device_id ELSE u.parent_id END AS origin_id
+    FROM unit u LEFT JOIN link_owner l ON l.id = u.id
     UNION ALL
-    SELECT 'frame', id, CASE WHEN parent_frame_id IS NOT NULL THEN 'frame' ELSE 'device' END,
-           COALESCE(parent_frame_id, parent_device_id) FROM frame
+    SELECT 'connector', c.id, CASE WHEN u.kind = 'link' THEN l.device_id ELSE u.id END
+    FROM connector c JOIN unit u ON u.id = c.component_id LEFT JOIN link_owner l ON l.id = u.id
     UNION ALL
-    SELECT 'link', id, 'device', parent_device_id FROM link_owner
-    UNION ALL
-    SELECT 'connector', c.id, 'device', COALESCE(c.device_id, l.parent_device_id)
-    FROM connector c LEFT JOIN link_owner l ON l.id = c.link_id
-    UNION ALL
-    SELECT 'holder', h.id, CASE WHEN h.frame_id IS NOT NULL THEN 'frame' ELSE 'device' END,
-           COALESCE(h.device_id, h.frame_id, l.parent_device_id)
-    FROM holder h LEFT JOIN link_owner l ON l.id = h.link_id
+    SELECT 'holder', h.id, CASE WHEN u.kind = 'link' THEN l.device_id ELSE u.id END
+    FROM holder h JOIN unit u ON u.id = h.unit_id LEFT JOIN link_owner l ON l.id = u.id
 ), offsets AS (
     SELECT p.id, (origin.geom->>'x')::numeric AS x, (origin.geom->>'y')::numeric AS y
     FROM placement p JOIN owners o ON o.entity_type = p.entity_type AND o.entity_id = p.entity_id
     JOIN placement origin ON origin.view_id = p.view_id
-        AND origin.entity_type = o.origin_type AND origin.entity_id = o.origin_id
+        AND origin.entity_type = 'unit' AND origin.entity_id = o.origin_id
     JOIN view v ON v.id = p.view_id AND v.name = 'Мнемосхема 2D'
 )
 UPDATE placement p SET geom = CASE WHEN p.geom ? 'lines' THEN
@@ -340,3 +376,5 @@ UPDATE placement p SET geom = CASE WHEN p.geom ? 'lines' THEN
         || CASE WHEN p.geom ? 'base_y' THEN jsonb_build_object('base_y', (p.geom->>'base_y')::numeric - o.y) ELSE '{}'::jsonb END
     END
 FROM offsets o WHERE p.id = o.id;
+
+COMMIT;

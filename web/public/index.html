@@ -14,7 +14,7 @@
     --border: light-dark(#d7dae0, #3a3f4a);
     --dev-fill: light-dark(#eef1f5, #262a33);
     --dev: light-dark(#16a34a, #4ade80);
-    --frame-fill: light-dark(#f3f4f6, #20232b);
+    --base-unit-fill: light-dark(#f3f4f6, #20232b);
     --link: light-dark(#2563eb, #60a5fa);
     --holder: light-dark(#d97706, #fbbf24);
     --accent: light-dark(#7c3aed, #a78bfa);
@@ -25,18 +25,33 @@
   body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg);
          font: 400 13px/1.45 system-ui, sans-serif;
          display: flex; flex-direction: column; }
-  .topbar { display: flex; align-items: center; justify-content: space-between;
-            gap: 12px; margin: 0 0 10px; }
-  h1 { font-size: 14px; font-weight: 500; margin: 0; }
-  .field-nav { display: flex; align-items: center; gap: 10px; }
+  .topbar { display: flex; flex-direction: column; gap: 12px;
+            padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+  h1 { font-size: 14px; font-weight: 500; margin: 0; overflow-wrap: anywhere; }
+  .field-nav { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
   #back-btn { padding: 4px 10px; color: var(--fg); background: var(--card);
               border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
   #back-btn[hidden] { display: none; }
   .field-boundary { pointer-events: none; }
-  #scene { flex: 1; min-height: 0; border-radius: 8px; overflow: auto; cursor: grab; }
+  .workspace { display: flex; flex: 1; min-height: 0; gap: 12px; }
+  #properties { flex: 0 0 260px; padding: 16px; overflow: auto; background: var(--card);
+                border: 1px solid var(--border); border-radius: 8px; }
+  #properties label[hidden] { display: none; }
+  #property-empty { color: var(--muted); margin: 0; }
+  #properties h2 { margin: 0 0 16px; font-size: 14px; }
+  #properties label { display: block; margin-bottom: 14px; color: var(--muted); }
+  #property-details input, #property-details select { display: block; width: 100%; margin-top: 6px;
+    padding: 8px; background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; font: inherit; }
+  #property-save { padding: 7px 12px; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--accent); border-radius: 6px; cursor: pointer; font: inherit; }
+  #property-save:disabled { opacity: .5; cursor: default; }
+  #property-status { color: var(--muted); margin-top: 10px; overflow-wrap: anywhere; }
+  #property-status.error { color: light-dark(#b91c1c, #f87171); }
+  #scene { flex: 1; min-width: 0; min-height: 0; border-radius: 8px; overflow: auto; cursor: grab; }
   svg { display: block; touch-action: none; }
   body.editing g[data-dev] { cursor: grab; }
-  body.editing g[data-frame] { cursor: grab; }
+  body.editing g[data-base-unit] { cursor: grab; }
   #scene.panning { cursor: grabbing; }
   .gridbg { display: none; }
   body.editing .gridbg { display: block; }
@@ -52,14 +67,14 @@
   .zbtn { font: 500 16px/1 system-ui, sans-serif; }
   body.editing #edit-btn { border-color: var(--accent); color: var(--accent); }
   rect.dev { fill: var(--dev-fill); fill-opacity: .8; stroke: var(--dev); stroke-width: 1.5; }
-  rect.frame-rect { fill: var(--frame-fill); stroke: var(--holder); stroke-width: 1.5; stroke-dasharray: 5 4; }
+  rect.base-unit-rect { fill: var(--base-unit-fill); stroke: var(--holder); stroke-width: 1.5; stroke-dasharray: 5 4; }
   polyline.link { stroke: var(--link); stroke-width: 2.5; fill: none; }
   circle.conn { fill: var(--link); }
   circle.hold { fill: none; stroke: var(--holder); stroke-width: 2; }
   text { fill: var(--fg); font-size: 13px; }
-  text.sub, text.flabel { font-size: 11px; }
+  text.sub, text.ulabel { font-size: 11px; }
   text.dlabel { fill: var(--dev); }
-  text.flabel { fill: var(--holder); }
+  text.ulabel { fill: var(--holder); }
   text.llabel { fill: var(--link); font-size: 11px; cursor: pointer;
                 paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
   .hit { fill: transparent; stroke: none; }
@@ -77,34 +92,57 @@
   svg.has-sel .el.sel { opacity: 1; }
   svg.has-sel text.llabel { opacity: .3; }
   svg.has-sel text.llabel.sel { opacity: 1; fill: var(--accent); }
-  .el.sel rect.dev, .el.sel rect.frame-rect { stroke: var(--accent); stroke-width: 2.5; }
+  .el.sel rect.dev, .el.sel rect.base-unit-rect { stroke: var(--accent); stroke-width: 2.5; }
   .el.sel polyline.link { stroke: var(--accent); stroke-width: 3.5; }
   .el.sel circle.conn { fill: var(--accent); }
   .el.sel circle.hold { stroke: var(--accent); stroke-width: 3; }
   .el.sel text { fill: var(--accent); }
-  #err { color: light-dark(#b91c1c, #f87171); }
+  #err, #save-status.error { color: light-dark(#b91c1c, #f87171); }
+  #save-status { color: var(--muted); font-size: 12px; }
+  #save-status:empty { display: none; }
+  #save-retry { color: var(--fg); background: var(--card); border: 1px solid var(--border);
+                border-radius: 6px; padding: 4px 8px; cursor: pointer; }
 </style>
 </head>
 <body>
-<div class="topbar">
-  <div class="field-nav">
-    <button id="back-btn" type="button" hidden>← Назад</button>
-    <h1 id="field-title">DSM — мнемосхема системы (данные из PostgreSQL)</h1>
-  </div>
-  <div class="tools">
-    <input id="grid-step" type="number" min="5" max="200" step="5" value="20" title="Шаг сетки (единицы модели)" aria-label="Шаг сетки">
-    <button class="zbtn" id="zoom-out" type="button" title="Уменьшить масштаб" aria-label="Уменьшить масштаб">−</button>
-    <button class="zbtn" id="zoom-in" type="button" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button>
-    <button id="edit-btn" type="button" title="Редактировать схему" aria-label="Редактировать схему">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
-    </button>
-  </div>
+<div class="workspace">
+  <aside id="properties" aria-label="Управление схемой и параметры объекта">
+    <header class="topbar">
+      <div class="field-nav">
+        <button id="back-btn" type="button" hidden>← Назад</button>
+        <h1 id="field-title">DSM — мнемосхема системы (данные из PostgreSQL)</h1>
+      </div>
+      <div class="tools">
+        <input id="grid-step" type="number" min="5" max="200" step="5" value="20" title="Шаг сетки (единицы модели)" aria-label="Шаг сетки">
+        <button class="zbtn" id="zoom-out" type="button" title="Уменьшить масштаб" aria-label="Уменьшить масштаб">−</button>
+        <button class="zbtn" id="zoom-in" type="button" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button>
+        <button id="edit-btn" type="button" title="Редактировать схему" aria-label="Редактировать схему">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+        </button>
+      </div>
+      <span id="save-status" role="status" aria-live="polite"></span>
+      <button id="save-retry" type="button" hidden>Повторить сохранение</button>
+    </header>
+    <p id="property-empty">Выберите объект на схеме, чтобы изменить его параметры.</p>
+    <section id="property-details" hidden>
+      <h2 id="property-title">Параметры объекта</h2>
+      <label id="property-member-field" hidden>Объект в контакте
+        <select id="property-member"></select>
+      </label>
+      <form id="property-form">
+        <label>Название<input id="property-name" name="name" required autocomplete="off"></label>
+        <label id="property-resource-field" hidden>Ресурс<select id="property-resource" name="resource_id"></select></label>
+        <button id="property-save" type="submit">Сохранить</button>
+        <div id="property-status" role="status" aria-live="polite"></div>
+      </form>
+    </section>
+  </aside>
+  <div id="scene"></div>
 </div>
-<div id="scene"></div>
 <script>
 (function () {
   var NS = 'http://www.w3.org/2000/svg';
-  var DEV_W = 120, DEV_H = 50, FRAME_HALF = 30, FRAME_PAD = 14;
+  var DEV_W = 120, DEV_H = 50, UNIT_HALF = 30, UNIT_PAD = 14;
 
   function el(tag, attrs, parent) {
     var n = document.createElementNS(NS, tag);
@@ -225,92 +263,267 @@
 
   var model = null, placementModel = null, anim = {}, raf = null, deselect = function () {};
   var focusId = null, fieldStack = [];
+  var savedPlacements = {}, saving = false;
+  var selected = null, propertySaving = false;
+  var propertyName = document.getElementById('property-name');
+  var propertyResource = document.getElementById('property-resource');
+  var propertyStatus = document.getElementById('property-status');
+  var propertyMember = document.getElementById('property-member');
 
-  function linkParent(l, links) {
-    return l.parent_device_id || (l.parent_link_id ? linkParent(links[l.parent_link_id], links) : null);
+  function entityDescription(type) {
+    return {
+      unit: 'Unit — материальная сущность с креплениями Holder. Базовый Unit не является Component и не имеет Connector.',
+      device: 'Device → Component → Unit. Component — инженерный компонент с Connector; Holder наследуется от Unit. Device генерирует, преобразует, накапливает, коммутирует или регулирует ресурс, не наследуя пассивную передачу Link.',
+      link: 'Link → Component → Unit. Component — инженерный компонент с Connector; Holder наследуется от Unit. Link пассивно передаёт ресурс без изменения его вида.',
+      connector: 'Connector — разъём инженерного компонента (Component): Device или Link.',
+      holder: 'Holder — крепление материальной сущности (Unit): базового Unit, Device или Link.'
+    }[type];
   }
 
-  function frameParent(f, frames) {
-    return f.parent_device_id || (f.parent_frame_id ? frameParent(frames[f.parent_frame_id], frames) : null);
+  function showProperties(type, rows, id) {
+    selected = { type: type, id: id || rows[0].id };
+    var row = byId(entityRows(placementModel, type))[selected.id];
+    document.getElementById('property-details').hidden = false;
+    document.getElementById('property-empty').hidden = true;
+    document.getElementById('property-title').textContent = type.charAt(0).toUpperCase() + type.slice(1);
+    document.getElementById('property-title').title = entityDescription(type);
+    document.getElementById('property-member-field').hidden = rows.length < 2;
+    propertyMember.replaceChildren();
+    rows.forEach(function (r) {
+      var option = document.createElement('option');
+      option.value = r.id;
+      option.textContent = r.name;
+      propertyMember.appendChild(option);
+    });
+    propertyMember.value = selected.id;
+    propertyName.value = row.name;
+    propertyName.setCustomValidity('');
+    document.getElementById('property-resource-field').hidden = type !== 'link';
+    propertyResource.replaceChildren();
+    [{ id: '', name: 'Не задан' }].concat(placementModel.resources).forEach(function (r) {
+      var option = document.createElement('option');
+      option.value = r.id;
+      option.textContent = r.name;
+      propertyResource.appendChild(option);
+    });
+    propertyResource.value = row.resource_id || '';
+    propertyStatus.textContent = '';
+    propertyStatus.classList.remove('error');
+  }
+
+  propertyMember.addEventListener('change', function () {
+    var rows = Array.from(this.options).map(function (option) {
+      return byId(entityRows(placementModel, selected.type))[option.value];
+    });
+    showProperties(selected.type, rows, Number(this.value));
+  });
+  propertyName.addEventListener('input', function () { this.setCustomValidity(''); });
+  document.getElementById('property-form').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    if (!selected || propertySaving) return;
+    var name = propertyName.value.trim();
+    if (!name) {
+      propertyName.setCustomValidity('Введите название');
+      propertyName.reportValidity();
+      return;
+    }
+    var target = selected;
+    var body = { name: name };
+    if (target.type === 'link') body.resource_id = propertyResource.value ? Number(propertyResource.value) : null;
+    propertySaving = true;
+    propertyName.disabled = propertyResource.disabled = true;
+    document.getElementById('property-save').disabled = true;
+    propertyStatus.classList.remove('error');
+    propertyStatus.textContent = 'Сохранение…';
+    try {
+      var response = await fetch('/api/entities/' + target.type + '/' + target.id, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      });
+      var result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'HTTP ' + response.status);
+      [placementModel, model].forEach(function (m) {
+        var row = byId(entityRows(m, target.type))[target.id];
+        if (!row) return;
+        row.name = result.name;
+        if (target.type === 'link') row.resource_id = result.resource_id;
+      });
+      render();
+      if (selected === target) {
+        propertyName.value = result.name;
+        propertyMember.selectedOptions[0].textContent = result.name;
+        propertyStatus.textContent = 'Сохранено';
+      }
+    } catch (err) {
+      if (selected === target) {
+        propertyStatus.textContent = 'Не сохранено: ' + err.message;
+        propertyStatus.classList.add('error');
+      }
+    } finally {
+      propertySaving = false;
+      propertyName.disabled = propertyResource.disabled = false;
+      document.getElementById('property-save').disabled = false;
+    }
+  });
+
+  function placementSnapshot() {
+    return ['unit', 'connector', 'holder'].flatMap(function (type) {
+      return placementModel[type + 's'].map(function (row) {
+        var geom;
+        if (type === 'unit' && row.kind === 'link') {
+          var lines = {};
+          placementModel.linkPoints.forEach(function (p) {
+            if (p.link_id !== row.id) return;
+            if (!lines[p.line_no]) lines[p.line_no] = [];
+            lines[p.line_no].push(p);
+          });
+          geom = { lines: Object.keys(lines).sort(function (a, b) { return a - b; }).map(function (line) {
+            return { line_no: +line, points: lines[line].sort(function (a, b) { return a.ord - b.ord; })
+              .map(function (p) { return [p.x, p.y]; }) };
+          }) };
+        } else {
+          geom = { x: row.x, y: row.y };
+          var keys = type !== 'unit' ? [] : row.kind === 'device' ? ['w', 'h'] : ['base_y'];
+          keys.forEach(function (key) { if (row[key] != null) geom[key] = row[key]; });
+        }
+        return { entity_type: type, entity_id: row.id, geom: geom };
+      });
+    });
+  }
+
+  function changedPlacements() {
+    return placementSnapshot().filter(function (p) {
+      return savedPlacements[p.entity_type + ':' + p.entity_id] !== JSON.stringify(p.geom);
+    });
+  }
+
+  function saveStatus(text, error) {
+    var status = document.getElementById('save-status');
+    status.textContent = text;
+    status.title = error || '';
+    status.classList.toggle('error', !!error);
+    document.getElementById('save-retry').hidden = !error;
+  }
+
+  function saveToDatabase() {
+    if (!placementModel || saving) return;
+    if (drag && drag.kind !== 'pan') { saveStatus('Не сохранено'); return; }
+    var placements = changedPlacements();
+    if (!placements.length) { saveStatus('Сохранено'); return; }
+    saving = true;
+    saveStatus('Сохранение…');
+    fetch('/api/placements', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ placements: placements })
+    }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      placements.forEach(function (p) {
+        savedPlacements[p.entity_type + ':' + p.entity_id] = JSON.stringify(p.geom);
+      });
+      saving = false;
+      saveToDatabase();
+    }).catch(function (e) {
+      saving = false;
+      saveStatus('Не сохранено', String(e.message || e));
+    });
+  }
+
+  document.getElementById('save-retry').addEventListener('click', saveToDatabase);
+  window.addEventListener('beforeunload', function (e) {
+    if (!propertySaving && (!placementModel || (!saving && !changedPlacements().length))) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
+
+  // Массивы отрисовки ссылаются на те же Unit, не создавая копий сущностей.
+  function projectUnits(m) {
+    m.unitIndex = byId(m.units);
+    m.devices = m.units.filter(function (u) { return u.kind === 'device'; });
+    m.links = m.units.filter(function (u) { return u.kind === 'link'; });
+    m.baseUnits = m.units.filter(function (u) { return u.kind === 'unit'; });
+    return m;
+  }
+  function entityRows(m, type) {
+    return type === 'connector' || type === 'holder' ? m[type + 's'] : m.units;
+  }
+  function ownerId(port) { return port.component_id != null ? port.component_id : port.unit_id; }
+  function ownerKind(port, kind) {
+    var owner = model.unitIndex[ownerId(port)];
+    return !!owner && owner.kind === kind;
+  }
+  // Ближайший Device-предок задаёт начало координат Link, даже вложенного.
+  function deviceParent(unit, units) {
+    var parent = unit && units[unit.parent_id];
+    while (parent && parent.kind !== 'device') parent = units[parent.parent_id];
+    return parent ? parent.id : null;
+  }
+  function portOrigin(port, units) {
+    var owner = units[ownerId(port)];
+    return owner && owner.kind === 'link' ? units[deviceParent(owner, units)] : owner;
   }
 
   function loadField() {
-    model = JSON.parse(JSON.stringify(placementModel));
-    var m = model, links = byId(m.links);
+    model = projectUnits(JSON.parse(JSON.stringify(placementModel)));
+    var m = model;
     if (focusId != null) {
-      var ids = devSubtree(focusId);
-      m.devices = m.devices.filter(function (d) { return ids[d.id]; });
-      m.links = m.links.filter(function (l) { return ids[linkParent(l, links)]; });
-      var allFrames = byId(m.frames);
-      m.frames = m.frames.filter(function (f) { return ids[frameParent(f, allFrames)]; });
-      var ls = byId(m.links), fs = byId(m.frames);
-      m.linkPoints = m.linkPoints.filter(function (p) { return ls[p.link_id]; });
-      m.connectors = m.connectors.filter(function (c) { return ids[c.device_id] || ls[c.link_id]; });
-      m.holders = m.holders.filter(function (h) {
-        return (ids[h.device_id] && h.device_id !== focusId) || ls[h.link_id] || fs[h.frame_id];
-      });
+      var ids = unitSubtree(focusId);
+      m.units = m.units.filter(function (u) { return ids[u.id]; });
+      projectUnits(m);
+      m.linkPoints = m.linkPoints.filter(function (p) { return ids[p.link_id]; });
+      m.connectors = m.connectors.filter(function (c) { return ids[c.component_id]; });
+      m.holders = m.holders.filter(function (h) { return ids[h.unit_id] && h.unit_id !== focusId; });
       var cs = byId(m.connectors), hs = byId(m.holders);
       m.connections = m.connections.filter(function (p) { return cs[p.connector_a_id] && cs[p.connector_b_id]; });
       m.bindings = m.bindings.filter(function (p) { return hs[p.holder_a_id] && hs[p.holder_b_id]; });
-      var root = byId(m.devices)[focusId];
+      var root = m.unitIndex[focusId];
       root.x = root.y = 0;
-      root.parent_device_id = null;
+      root.parent_id = null;
     }
-    var devices = byId(m.devices), frames = byId(m.frames), doneD = {}, doneF = {};
-    function device(d) {
-      if (doneD[d.id]) return;
-      if (d.parent_device_id) {
-        var p = devices[d.parent_device_id];
-        device(p);
-        if (d.x != null) { d.x += p.x; d.y += p.y; }
+    var units = m.unitIndex, done = {};
+    function position(unit) {
+      if (done[unit.id] || unit.kind === 'link') return;
+      var parent = units[unit.parent_id];
+      if (parent) {
+        position(parent);
+        if (unit.x != null) {
+          unit.x += parent.x; unit.y += parent.y;
+          if (unit.kind === 'unit' && unit.base_y != null) unit.base_y += parent.y;
+        }
       }
-      doneD[d.id] = true;
+      done[unit.id] = true;
     }
-    function frame(f) {
-      if (doneF[f.id]) return;
-      var p = f.parent_frame_id ? frames[f.parent_frame_id] : devices[f.parent_device_id];
-      if (f.parent_frame_id) frame(p);
-      if (p && f.x != null) {
-        f.x += p.x; f.y += p.y;
-        if (f.base_y != null) f.base_y += p.y;
-      }
-      doneF[f.id] = true;
-    }
-    m.devices.forEach(device);
-    m.frames.forEach(frame);
-    links = byId(m.links);
+    m.units.forEach(position);
     function port(p) {
-      var parent = p.device_id ? devices[p.device_id] : p.frame_id ? frames[p.frame_id] : devices[linkParent(links[p.link_id], links)];
+      var parent = portOrigin(p, units);
       if (parent && p.x != null) { p.x += parent.x; p.y += parent.y; }
     }
     m.connectors.forEach(port);
     m.holders.forEach(port);
     m.linkPoints.forEach(function (p) {
-      var d = devices[linkParent(links[p.link_id], links)];
+      var d = units[deviceParent(units[p.link_id], units)];
       if (d) { p.x += d.x; p.y += d.y; }
     });
   }
 
   function savePlacement() {
-    var m = model, devices = byId(m.devices), frames = byId(m.frames), links = byId(m.links);
-    ['devices', 'frames', 'connectors', 'holders'].forEach(function (key) {
+    var m = model, units = m.unitIndex, links = byId(m.links);
+    ['units', 'connectors', 'holders'].forEach(function (key) {
       var stored = byId(placementModel[key]);
       m[key].forEach(function (row) {
-        var target = stored[row.id];
-        if (key === 'devices') { target.w = row.w; target.h = row.h; }
-        if (key === 'devices' && row.id === focusId) return;
-        var p;
-        if (key === 'devices') p = devices[row.parent_device_id];
-        else if (key === 'frames') p = row.parent_frame_id ? frames[row.parent_frame_id] : devices[row.parent_device_id];
-        else p = row.device_id ? devices[row.device_id] : row.frame_id ? frames[row.frame_id] : devices[linkParent(links[row.link_id], links)];
+        var target = stored[row.id], p;
+        if (key === 'units') {
+          if (row.kind === 'link') return;
+          if (row.kind === 'device') { target.w = row.w; target.h = row.h; }
+          if (row.id === focusId) return;
+          p = units[row.parent_id];
+        } else p = portOrigin(row, units);
         target.x = row.x == null ? null : row.x - (p ? p.x : 0);
         target.y = row.y == null ? null : row.y - (p ? p.y : 0);
-        if (key === 'frames' && row.base_y != null) target.base_y = row.base_y - (p ? p.y : 0);
+        if (key === 'units' && row.kind === 'unit' && row.base_y != null) target.base_y = row.base_y - (p ? p.y : 0);
       });
     });
     placementModel.linkPoints = placementModel.linkPoints.filter(function (p) { return !links[p.link_id]; });
     m.linkPoints.forEach(function (p) {
-      var d = devices[linkParent(links[p.link_id], links)];
+      var d = units[deviceParent(links[p.link_id], units)];
       placementModel.linkPoints.push(Object.assign({}, p, { x: p.x - (d ? d.x : 0), y: p.y - (d ? d.y : 0) }));
     });
   }
@@ -391,12 +604,12 @@
   // Перемещение Device: вместе с ним едут его порты, крепления и внутренняя
   // схема составного Device; парные коннекторы линков следуют за контактом.
   function moveLink(l, dx, dy, moved, seen) {
-    if (seen && seen['link' + l.id]) return;
-    if (seen) seen['link' + l.id] = true;
+    if (seen && seen['unit' + l.id]) return;
+    if (seen) seen['unit' + l.id] = true;
     model.linkPoints.forEach(function (p) { if (p.link_id === l.id) { p.x += dx; p.y += dy; } });
-    model.connectors.forEach(function (c) { if (c.link_id === l.id) { c.x += dx; c.y += dy; if (moved) moved.push(c.id); } });
-    model.holders.forEach(function (h) { if (h.link_id === l.id) { h.x += dx; h.y += dy; } });
-    model.links.forEach(function (k) { if (k.parent_link_id === l.id) moveLink(k, dx, dy, moved, seen); });
+    model.connectors.forEach(function (c) { if (c.component_id === l.id) { c.x += dx; c.y += dy; if (moved) moved.push(c.id); } });
+    model.holders.forEach(function (h) { if (h.unit_id === l.id) { h.x += dx; h.y += dy; } });
+    model.links.forEach(function (k) { if (k.parent_id === l.id) moveLink(k, dx, dy, moved, seen); });
   }
   function nearestOnSeg(p, a, b) {
     var vx = b.x - a.x, vy = b.y - a.y;
@@ -411,32 +624,32 @@
   }
   // Крепления линка остаются на трассе после её перестройки.
   function devSizeM(d) {
-    if (!isCompDev(d)) return { w: d.w || DEV_W, h: d.h || DEV_H };
+    if (!isCompositeDevice(d)) return { w: d.w || DEV_W, h: d.h || DEV_H };
     var t = d.id === focusId ? 1 : editMode ? 0 : anim[d.id] || 0;
     return { w: lerp(DEV_W, d.w || DEV_W, t), h: lerp(DEV_H, d.h || DEV_H, t) };
   }
   function exitAtM(pt, fb, lid) {
     var c = null;
-    model.connectors.forEach(function (cc) { if (cc.device_id && cc.x === pt.x && cc.y === pt.y) c = cc; });
+    model.connectors.forEach(function (cc) { if (ownerKind(cc, 'device') && cc.x === pt.x && cc.y === pt.y) c = cc; });
     if (!c) return fb ? 'h' : 'v';
-    var d = byId(model.devices)[c.device_id], s = devSizeM(d);
+    var d = byId(model.devices)[c.component_id], s = devSizeM(d);
     var horiz = Math.abs(pt.x - d.x) / (s.w / 2) >= Math.abs(pt.y - d.y) / (s.h / 2);
     var sg = horiz ? (pt.x >= d.x ? 1 : -1) : (pt.y >= d.y ? 1 : -1);
-    var inside = d.id === focusId || (lid && linkParent(byId(model.links)[lid], byId(model.links)) === d.id);
+    var inside = d.id === focusId || (lid && deviceParent(model.unitIndex[lid], model.unitIndex) === d.id);
     return { a: horiz ? 'h' : 'v', s: inside ? -sg : sg };
   }
   function alignDevicePorts(touched) {
     var devices = byId(model.devices), connectors = byId(model.connectors);
     model.connectors.forEach(function (c) {
-      if (!c.device_id || c.device_id === focusId || c.x == null) return;
+      if (!ownerKind(c, 'device') || c.component_id === focusId || c.x == null) return;
       var partners = model.connections.filter(function (p) {
         return p.connector_a_id === c.id || p.connector_b_id === c.id;
       }).map(function (p) { return connectors[p.connector_a_id === c.id ? p.connector_b_id : p.connector_a_id]; });
-      if (partners.length !== 1 || !partners[0].link_id) return;
+      if (partners.length !== 1 || !ownerKind(partners[0], 'link')) return;
       var lc = partners[0], lines = {};
-      if (!touched[lc.link_id]) return;
+      if (!touched[lc.component_id]) return;
       model.linkPoints.forEach(function (p) {
-        if (p.link_id === lc.link_id) (lines[p.line_no] = lines[p.line_no] || []).push(p);
+        if (p.link_id === lc.component_id) (lines[p.line_no] = lines[p.line_no] || []).push(p);
       });
       Object.keys(lines).forEach(function (k) {
         var arr = lines[k].sort(function (a, b) { return a.ord - b.ord; });
@@ -445,7 +658,7 @@
         if (arr[0].x !== lc.x || arr[0].y !== lc.y) return;
         // Соседний угол едет с устройством; направление берём от следующей неподвижной вершины.
         var target = arr[Math.min(2, arr.length - 1)];
-        var d = devices[c.device_id], s = devSizeM(d);
+        var d = devices[c.component_id], s = devSizeM(d);
         var dx = target.x - d.x, dy = target.y - d.y;
         if (Math.abs(dx) <= s.w / 2 && Math.abs(dy) <= s.h / 2) return;
         var oldH = Math.abs(c.x - d.x) / (s.w / 2) >= Math.abs(c.y - d.y) / (s.h / 2);
@@ -456,8 +669,8 @@
         var tangent = horiz ? 'y' : 'x', normal = horiz ? 'x' : 'y';
         var half = (horiz ? s.h : s.w) / 2;
         var base = horiz === oldH ? c[tangent] : d[tangent];
-        var obstacles = model.connectors.filter(function (o) { return o.device_id === d.id && o.id !== c.id; })
-          .concat(model.holders.filter(function (h) { return h.device_id === d.id; }));
+        var obstacles = model.connectors.filter(function (o) { return o.component_id === d.id && o.id !== c.id; })
+          .concat(model.holders.filter(function (h) { return h.unit_id === d.id; }));
         var pos = null;
         for (var offset = 0; offset <= 2 * half && !pos; offset += 14) {
           [base + offset, base - offset].some(function (v) {
@@ -493,14 +706,14 @@
       [[0, 1], [n - 1, n - 2]].forEach(function (pr) {
         var end = arr[pr[0]], nb = arr[pr[1]], c = null;
         model.connectors.forEach(function (cc) {
-          if (cc.device_id && cc.x === end.x && cc.y === end.y) c = cc;
+          if (ownerKind(cc, 'device') && cc.x === end.x && cc.y === end.y) c = cc;
         });
         if (!c) return;
-        var d = byId(model.devices)[c.device_id]; if (!d || d.x == null) return;
+        var d = byId(model.devices)[c.component_id]; if (!d || d.x == null) return;
         var s = devSizeM(d);
         var horiz = Math.abs(end.x - d.x) / (s.w / 2) >= Math.abs(end.y - d.y) / (s.h / 2);
         var ax = horiz ? 'x' : 'y';
-        var links = byId(model.links), inside = d.id === focusId || linkParent(links[lid], links) === d.id;
+        var links = byId(model.links), inside = d.id === focusId || deviceParent(links[lid], model.unitIndex) === d.id;
         var sg = (end[ax] >= d[ax] ? 1 : -1) * (inside ? -1 : 1);
         if ((nb[ax] - end[ax]) * sg < 25) nb[ax] = end[ax] + sg * 25;
       });
@@ -522,7 +735,7 @@
         .map(function (p) { return { x: p.x, y: p.y }; }), lid);
     });
     m.holders.forEach(function (h) {
-      if (h.link_id !== lid || h.x == null) return;
+      if (h.unit_id !== lid || h.x == null) return;
       var best = null;
       routes.forEach(function (r) {
         for (var i = 1; i < r.length; i++) {
@@ -537,16 +750,16 @@
   function moveDeviceCore(id, dx, dy, moved, seen) {
     var m = model;
     function dev(d) {
-      if (seen['dev' + d.id]) return;
-      seen['dev' + d.id] = true;
+      if (seen['unit' + d.id]) return;
+      seen['unit' + d.id] = true;
       d.x += dx; d.y += dy;
-      m.connectors.forEach(function (c) { if (c.device_id === d.id) { c.x += dx; c.y += dy; moved.push(c.id); } });
-      m.holders.forEach(function (h) { if (h.device_id === d.id) { h.x += dx; h.y += dy; } });
-      m.devices.forEach(function (o) { if (o.parent_device_id === d.id) dev(o); });
-      m.links.forEach(function (l) { if (l.parent_device_id === d.id && !seen['link' + l.id]) moveLink(l, dx, dy, moved, seen); });
-      m.frames.forEach(function (f) {
-        if (f.parent_device_id !== d.id) return;
-        moveFrameCore(f.id, dx, dy, seen);
+      m.connectors.forEach(function (c) { if (c.component_id === d.id) { c.x += dx; c.y += dy; moved.push(c.id); } });
+      m.holders.forEach(function (h) { if (h.unit_id === d.id) { h.x += dx; h.y += dy; } });
+      m.devices.forEach(function (o) { if (o.parent_id === d.id) dev(o); });
+      m.links.forEach(function (l) { if (l.parent_id === d.id && !seen['unit' + l.id]) moveLink(l, dx, dy, moved, seen); });
+      m.baseUnits.forEach(function (f) {
+        if (f.parent_id !== d.id) return;
+        moveBaseUnitCore(f.id, dx, dy, seen);
       });
     }
     dev(byId(m.devices)[id]);
@@ -562,15 +775,15 @@
                     p.connector_b_id === moved[i] ? p.connector_a_id : null;
         if (other == null || moved.indexOf(other) >= 0) return;
         var c = byIdC[other];
-        if (!c.link_id) return;
+        if (!ownerKind(c, 'link')) return;
         var ox = c.x, oy = c.y;
-        var oldPts = m.linkPoints.filter(function (pt) { return pt.link_id === c.link_id; })
+        var oldPts = m.linkPoints.filter(function (pt) { return pt.link_id === c.component_id; })
           .map(function (pt) { return { line_no: pt.line_no, ord: pt.ord, x: pt.x, y: pt.y }; });
         c.x += dd.dx; c.y += dd.dy;
         // конец трассы и соседняя вершина (угол у грани / конец защитного
         // отхода) едут вместе с коннектором, иначе отход отрывается от контакта
         var lines = {};
-        m.linkPoints.forEach(function (pt) { if (pt.link_id === c.link_id) (lines[pt.line_no] = lines[pt.line_no] || []).push(pt); });
+        m.linkPoints.forEach(function (pt) { if (pt.link_id === c.component_id) (lines[pt.line_no] = lines[pt.line_no] || []).push(pt); });
         Object.keys(lines).forEach(function (k) {
           var arr = lines[k].sort(function (a, b) { return a.ord - b.ord; });
           var n = arr.length;
@@ -588,10 +801,10 @@
         oldPts.forEach(function (q) { (ls[q.line_no] = ls[q.line_no] || []).push(q); });
         var oldRoutes = Object.keys(ls).map(function (k) {
           return routeOf(ls[k].sort(function (a, b) { return a.ord - b.ord; })
-            .map(function (q) { return { x: q.x, y: q.y }; }), c.link_id);
+            .map(function (q) { return { x: q.x, y: q.y }; }), c.component_id);
         });
         m.holders.forEach(function (h) {
-          if (h.link_id !== c.link_id || h.x == null) return;
+          if (h.unit_id !== c.component_id || h.x == null) return;
           oldRoutes.forEach(function (r) {
             // Отход добавляет промежуточную вершину: сегмент крепления может
             // заканчиваться не в коннекторе, а на одной линии с отходом.
@@ -604,7 +817,7 @@
             }
           });
         });
-        touched[c.link_id] = true;
+        touched[c.component_id] = true;
         deltas[other] = dd;
         moved.push(other);
       });
@@ -617,7 +830,7 @@
     var byLink = {};
     model.linkPoints.forEach(function (p) { (byLink[p.link_id] = byLink[p.link_id] || []).push(p); });
     Object.keys(byLink).forEach(function (lid) {
-      var cs = model.connectors.filter(function (c) { return c.link_id === +lid; });
+      var cs = model.connectors.filter(function (c) { return c.component_id === +lid; });
       if (cs.length !== 2) return;
       var lines = {};
       byLink[lid].forEach(function (p) { (lines[p.line_no] = lines[p.line_no] || []).push(p); });
@@ -646,71 +859,52 @@
     savePlacement();
     render();
   }
-  // Перемещение объекта: вместе с ним едет всё, что связано парами
-  // Holder↔Holder (Frame, Device, Link) и каскадом Connector↔Connector.
-  function frameSubtree(id) {
+  // Перемещение Unit: состав и пары Holder↔Holder следуют за владельцем,
+  // ресурсные контакты доводятся каскадом Connector↔Connector.
+  function unitSubtree(id) {
     var ids = {};
-    (function walk(fid) {
-      ids[fid] = true;
-      model.frames.forEach(function (f) { if (f.parent_frame_id === fid) walk(f.id); });
+    (function walk(uid) {
+      if (ids[uid]) return;
+      ids[uid] = true;
+      model.units.forEach(function (u) { if (u.parent_id === uid) walk(u.id); });
     })(id);
     return ids;
   }
-  function moveFrameCore(id, dx, dy, seen) {
-    if (seen['frame' + id]) return;
-    seen['frame' + id] = true;
-    var f = byId(model.frames)[id];
-    f.x += dx; f.y += dy;
-    if (f.base_y != null) f.base_y += dy;
-    model.holders.forEach(function (h) { if (h.frame_id === id) { h.x += dx; h.y += dy; } });
-    model.frames.forEach(function (child) { if (child.parent_frame_id === id) moveFrameCore(child.id, dx, dy, seen); });
-  }
-  function devSubtree(id) {
-    var ids = {};
-    (function walk(d) {
-      ids[d] = true;
-      model.devices.forEach(function (o) { if (o.parent_device_id === d) walk(o.id); });
-    })(id);
-    return ids;
+  function moveBaseUnitCore(id, dx, dy, seen) {
+    if (seen['unit' + id]) return;
+    seen['unit' + id] = true;
+    var unit = model.unitIndex[id];
+    unit.x += dx; unit.y += dy;
+    if (unit.base_y != null) unit.base_y += dy;
+    model.holders.forEach(function (h) { if (h.unit_id === id) { h.x += dx; h.y += dy; } });
+    model.baseUnits.forEach(function (child) { if (child.parent_id === id) moveBaseUnitCore(child.id, dx, dy, seen); });
   }
   function holderPairQueue(h, dx, dy, queue) {
     model.bindings.forEach(function (b) {
       var oid = b.holder_a_id === h.id ? b.holder_b_id : b.holder_b_id === h.id ? b.holder_a_id : null;
       if (oid == null) return;
       var o = byId(model.holders)[oid];
-      if (focusId != null && o.frame_id && !h.frame_id) return;
-      queue.push({ kind: o.device_id ? 'dev' : o.frame_id ? 'frame' : 'link',
-        id: o.device_id || o.frame_id || o.link_id, dx: dx, dy: dy });
+      // На внутреннем поле Device не тянет соседей через общую основу.
+      // Прямой перенос базового Unit по-прежнему переносит закреплённые объекты.
+      if (focusId != null && ownerKind(o, 'unit') && !ownerKind(h, 'unit')) return;
+      queue.push({ id: o.unit_id, dx: dx, dy: dy });
     });
   }
   function runQueue(queue, moved, deltas, touched, seen) {
     var m = model;
     while (queue.length) {
-      var q = queue.shift(), key = q.kind + q.id;
-      if (seen[key]) continue;
-      var start = moved.length;
-      if (q.kind === 'dev') {
-        moveDeviceCore(q.id, q.dx, q.dy, moved, seen);
-        var sub = devSubtree(q.id);
-        m.holders.forEach(function (h) { if (h.device_id && sub[h.device_id]) holderPairQueue(h, q.dx, q.dy, queue); });
-        var frames = byId(m.frames), links = byId(m.links);
-        m.frames.forEach(function (f) {
-          if (!sub[frameParent(f, frames)]) return;
-          m.holders.forEach(function (h) { if (h.frame_id === f.id) holderPairQueue(h, q.dx, q.dy, queue); });
-        });
-        m.links.forEach(function (l) {
-          if (!sub[linkParent(l, links)]) return;
-          m.holders.forEach(function (h) { if (h.link_id === l.id) holderPairQueue(h, q.dx, q.dy, queue); });
-        });
-      } else if (q.kind === 'frame') {
-        moveFrameCore(q.id, q.dx, q.dy, seen);
-        var subFrames = frameSubtree(q.id);
-        m.holders.forEach(function (h) { if (subFrames[h.frame_id]) holderPairQueue(h, q.dx, q.dy, queue); });
-      } else {
-        moveLink(byId(m.links)[q.id], q.dx, q.dy, moved, seen);
-        touched[q.id] = true;
-        m.holders.forEach(function (h) { if (h.link_id === q.id) holderPairQueue(h, q.dx, q.dy, queue); });
-      }
+      var q = queue.shift(), key = 'unit' + q.id;
+      if (seen[key] || q.id === focusId) continue;
+      var start = moved.length, unit = m.unitIndex[q.id];
+      var sub = unitSubtree(q.id);
+      // Учитываем только реально перемещённые сейчас сущности: потомок мог
+      // уже пройти очередь по другому креплению.
+      Object.keys(sub).forEach(function (id) { if (seen['unit' + id]) delete sub[id]; });
+      if (unit.kind === 'device') moveDeviceCore(q.id, q.dx, q.dy, moved, seen);
+      else if (unit.kind === 'unit') moveBaseUnitCore(q.id, q.dx, q.dy, seen);
+      else moveLink(unit, q.dx, q.dy, moved, seen);
+      m.holders.forEach(function (h) { if (sub[h.unit_id]) holderPairQueue(h, q.dx, q.dy, queue); });
+      m.links.forEach(function (l) { if (sub[l.id]) touched[l.id] = true; });
       for (var i = start; i < moved.length; i++) deltas[moved[i]] = { dx: q.dx, dy: q.dy };
     }
   }
@@ -721,9 +915,9 @@
     finishMove(touched);
   }
   function moveDevice(id, dx, dy) { moveWhole('dev', id, dx, dy); }
-  function moveFrame(id, dx, dy) { moveWhole('frame', id, dx, dy); }
+  function moveBaseUnit(id, dx, dy) { moveWhole('baseUnit', id, dx, dy); }
 
-  // Ресайз за ПНУ: якорь — ЛПУ, габарит пишется в d.w/d.h (память сессии);
+  // Ресайз за ПНУ: якорь — ЛПУ, габарит пишется в d.w/d.h;
   // порты и крепления масштабируются пропорционально от старого центра.
   function startResize(id, cx, cy) {
     var d = byId(model.devices)[id];
@@ -732,11 +926,11 @@
     return {
       kind: 'resize', id: id, cx: cx, cy: cy,
       tl: { x: d.x - old.w / 2, y: d.y - old.h / 2 }, old: old,
-      boundaryHolds: id === focusId ? placementModel.holders.filter(function (h) { return h.device_id === id; })
+      boundaryHolds: id === focusId ? placementModel.holders.filter(function (h) { return h.unit_id === id; })
         .map(function (h) { return { id: h.id, ox: h.x, oy: h.y }; }) : [],
-      ports: model.connectors.filter(function (c) { return c.device_id === id; })
+      ports: model.connectors.filter(function (c) { return c.component_id === id; })
         .map(function (c) { return { id: c.id, ox: c.x - oldC.x, oy: c.y - oldC.y }; }),
-      holds: model.holders.filter(function (h) { return h.device_id === id; })
+      holds: model.holders.filter(function (h) { return h.unit_id === id; })
         .map(function (h) { return { id: h.id, ox: h.x - oldC.x, oy: h.y - oldC.y }; })
     };
   }
@@ -766,7 +960,7 @@
       holderPairQueue(h, nx - h.x, ny - h.y, queue);
       h.x = nx; h.y = ny;
     });
-    seen['dev' + drag.id] = true;
+    seen['unit' + drag.id] = true;
     runQueue(queue, moved, deltas, touched, seen);
     cascadeContacts(moved, deltas, touched);
     finishMove(touched);
@@ -775,10 +969,8 @@
       var oldC = byId(outerModel.connectors), oldH = byId(outerModel.holders);
       var cs = byId(model.connectors), hs = byId(model.holders), root = byId(model.devices)[drag.id];
       var outerTouched = {}, outerQueue = [], outerSeen = {};
-      var sub = devSubtree(drag.id), frames = byId(model.frames), links = byId(model.links);
-      Object.keys(sub).forEach(function (id) { outerSeen['dev' + id] = true; });
-      model.frames.forEach(function (f) { if (sub[frameParent(f, frames)]) outerSeen['frame' + f.id] = true; });
-      model.links.forEach(function (l) { if (sub[linkParent(l, links)]) outerSeen['link' + l.id] = true; });
+      var sub = unitSubtree(drag.id);
+      Object.keys(sub).forEach(function (id) { outerSeen['unit' + id] = true; });
       drag.ports.forEach(function (p) {
         deltas[p.id] = { dx: cs[p.id].x - oldC[p.id].x, dy: cs[p.id].y - oldC[p.id].y };
       });
@@ -798,10 +990,8 @@
   // по вертикали, вертикальный — по горизонтали. Концы-разъёмы (первый и
   // последний stored узел) не двигаются; защитный перпендикулярный отход
   // у разъёма всегда восстанавливает orthoRoute. Углы остаются прямыми.
-  function isCompDev(d) {
-    return model.devices.some(function (o) { return o.parent_device_id === d.id; }) ||
-      model.links.some(function (o) { return o.parent_device_id === d.id; }) ||
-      model.frames.some(function (o) { return o.parent_device_id === d.id; });
+  function isCompositeDevice(d) {
+    return model.units.some(function (u) { return u.parent_id === d.id; });
   }
   function segJ(pts, horiz, span) {
     var ax = horiz ? 'x' : 'y';
@@ -872,7 +1062,7 @@
       var wx = (e.clientX - cm0.e) / cm0.a, wy = (e.clientY - cm0.f) / cm0.d;
       var cid = null;
       model.devices.forEach(function (d) {
-        if (d.x == null || d.id === focusId || !isCompDev(d)) return;
+        if (d.x == null || d.id === focusId || !isCompositeDevice(d)) return;
         var s = devSizeM(d);
         if (wx >= d.x - s.w / 2 && wx <= d.x + s.w / 2 && wy >= d.y - s.h / 2 && wy <= d.y + s.h / 2) cid = d.id;
       });
@@ -896,10 +1086,10 @@
       return;
     }
     var g = editMode && e.target.closest('g[data-dev]');
-    var fg = !g && editMode && e.target.closest('g[data-frame]');
+    var fg = !g && editMode && e.target.closest('g[data-base-unit]');
     // захват за кружок порта/крепления двигает его владельца, а не игнорируется
     var pg = !g && !fg && editMode && e.target.closest('g[data-pdev]');
-    var pf = !g && !fg && !pg && editMode && e.target.closest('g[data-pframe]');
+    var pf = !g && !fg && !pg && editMode && e.target.closest('g[data-pbase-unit]');
     if (g || pg) {
       var did = +(g || pg).getAttribute(g ? 'data-dev' : 'data-pdev');
       if (did === focusId) return;
@@ -907,9 +1097,9 @@
       drag = { kind: 'dev', id: did, cx: e.clientX, cy: e.clientY,
         tl0: { x: dd0.x - ds0.w / 2, y: dd0.y - ds0.h / 2 } };
     } else if (fg || pf) {
-      var fid = +(fg || pf).getAttribute(fg ? 'data-frame' : 'data-pframe');
-      var ff0 = byId(model.frames)[fid];
-      drag = { kind: 'frame', id: fid, cx: e.clientX, cy: e.clientY, f0: { x: ff0.x, y: ff0.y } };
+      var fid = +(fg || pf).getAttribute(fg ? 'data-base-unit' : 'data-pbase-unit');
+      var ff0 = byId(model.baseUnits)[fid];
+      drag = { kind: 'baseUnit', id: fid, cx: e.clientX, cy: e.clientY, f0: { x: ff0.x, y: ff0.y } };
     } else if (!e.target.closest('.el')) {
       drag = { kind: 'pan', cx: e.clientX, cy: e.clientY };
     } else return;
@@ -949,11 +1139,11 @@
     // Магнит к сетке считаем от старта драга (снап смещения, не абсолютной
     // позиции): иначе при нецелом угле объект прыгает сам по себе и отстаёт.
     // Точная посадка ЛПУ/вершины на сетку — при отпускании.
-    if (drag.kind === 'frame') {
-      var f = byId(model.frames)[drag.id];
+    if (drag.kind === 'baseUnit') {
+      var f = byId(model.baseUnits)[drag.id];
       var ftx = drag.f0.x + Math.round(dx / gridStep) * gridStep;
       var fty = drag.f0.y + Math.round(dy / gridStep) * gridStep;
-      moveFrame(drag.id, ftx - f.x, fty - f.y);
+      moveBaseUnit(drag.id, ftx - f.x, fty - f.y);
     } else {
       var d = byId(model.devices)[drag.id], s = devSizeM(d);
       var dtx = drag.tl0.x + Math.round(dx / gridStep) * gridStep;
@@ -962,20 +1152,22 @@
     }
   });
   document.addEventListener('pointerup', function () {
-    if (drag && dragMoved && (drag.kind === 'dev' || drag.kind === 'frame')) {
+    if (drag && dragMoved && (drag.kind === 'dev' || drag.kind === 'baseUnit')) {
       if (drag.kind === 'dev') {
         var d = byId(model.devices)[drag.id], s = devSizeM(d);
         var tx = Math.round((d.x - s.w / 2) / gridStep) * gridStep + s.w / 2;
         var ty = Math.round((d.y - s.h / 2) / gridStep) * gridStep + s.h / 2;
         if (tx !== d.x || ty !== d.y) moveDevice(drag.id, tx - d.x, ty - d.y);
       } else {
-        var f = byId(model.frames)[drag.id];
+        var f = byId(model.baseUnits)[drag.id];
         var fx = Math.round(f.x / gridStep) * gridStep, fy = Math.round(f.y / gridStep) * gridStep;
-        if (fx !== f.x || fy !== f.y) moveFrame(drag.id, fx - f.x, fy - f.y);
+        if (fx !== f.x || fy !== f.y) moveBaseUnit(drag.id, fx - f.x, fy - f.y);
       }
     }
+    var edited = drag && dragMoved;
     drag = null;
     document.getElementById('scene').classList.remove('panning');
+    if (edited) saveToDatabase();
   });
   document.getElementById('scene').addEventListener('click', function (e) {
     if (dragMoved) { e.stopPropagation(); dragMoved = false; }
@@ -984,7 +1176,13 @@
   fetch('/api/model').then(function (r) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
-  }).then(function (m) { placementModel = m; loadField(); render(); }).catch(function (e) {
+  }).then(function (m) {
+    placementModel = projectUnits(m);
+    placementSnapshot().forEach(function (p) {
+      savedPlacements[p.entity_type + ':' + p.entity_id] = JSON.stringify(p.geom);
+    });
+    loadField(); render();
+  }).catch(function (e) {
     var scene = document.getElementById('scene');
     scene.innerHTML = '<p id="err"></p>';
     document.getElementById('err').textContent = 'Ошибка загрузки модели: ' + String(e.message || e);
@@ -1007,20 +1205,20 @@
   // Расчёт геометрии сцены при заданной степени раскрытия составных Device (0..1).
   function buildLayout(tMap) {
     var m = model;
-    var devices = byId(m.devices), links = byId(m.links), frames = byId(m.frames),
+    var units = m.unitIndex, devices = byId(m.devices), links = byId(m.links),
         resources = byId(m.resources), connectors = byId(m.connectors), holders = byId(m.holders);
-    var compIds = {};
+    var compositeDeviceIds = {};
     m.devices.forEach(function (d) {
-      if (isCompDev(d)) compIds[d.id] = true;
+      if (isCompositeDevice(d)) compositeDeviceIds[d.id] = true;
     });
     function tOf(id) { return id === focusId ? 1 : editMode ? 0 : tMap[id] || 0; }
     function innerOpacity(id) {
       if (!id) return 1;
-      return fadeInner(tOf(id)) * innerOpacity(devices[id].parent_device_id);
+      return fadeInner(tOf(id)) * innerOpacity(devices[id].parent_id);
     }
-    function isComp(d) { return !!compIds[d.id]; }
+    function isComposite(d) { return !!compositeDeviceIds[d.id]; }
     function devSize(d) {
-      if (!isComp(d)) return { w: d.w || DEV_W, h: d.h || DEV_H, t: 0 };
+      if (!isComposite(d)) return { w: d.w || DEV_W, h: d.h || DEV_H, t: 0 };
       var t = tOf(d.id);
       return { w: lerp(DEV_W, d.w || DEV_W, t), h: lerp(DEV_H, d.h || DEV_H, t), t: t };
     }
@@ -1030,8 +1228,8 @@
       return { x: d.x, y: d.y + (dy < 0 ? -1 : 1) * DEV_H / 2 };
     }
     function connPos(c) {
-      var o = c.device_id ? devices[c.device_id] : null;
-      if (o && isComp(o)) {
+      var o = devices[c.component_id];
+      if (o && isComposite(o)) {
         var cp = collapsedPort(o, c), t = tOf(o.id);
         return { x: lerp(cp.x, c.x, t), y: lerp(cp.y, c.y, t) };
       }
@@ -1040,20 +1238,20 @@
       return { x: c.x, y: c.y };
     }
     function holdPos(h) {
-      // Крепление Frame едет за объектом, который он держит: позиция выводится
-      // из парного Holder (Device/Link), а не хранится независимо.
-      if (h.frame_id) {
+      // Крепление базового Unit едет за закреплённым объектом: позиция
+      // выводится из парного Holder (Device/Link), а не хранится независимо.
+      if (ownerKind(h, 'unit')) {
         var pr = null;
         for (var i = 0; i < m.bindings.length; i++) {
           var p = m.bindings[i];
           if (p.holder_a_id === h.id) { pr = holders[p.holder_b_id]; break; }
           if (p.holder_b_id === h.id) { pr = holders[p.holder_a_id]; break; }
         }
-        if (pr && !pr.frame_id) return holdPos(pr);
+        if (pr && !ownerKind(pr, 'unit')) return holdPos(pr);
         return { x: h.x, y: h.y };
       }
-      var o = h.device_id ? devices[h.device_id] : null;
-      if (o && isComp(o)) {
+      var o = devices[h.unit_id];
+      if (o && isComposite(o)) {
         var t = tOf(o.id);
         var cx = Math.max(o.x - DEV_W / 2, Math.min(o.x + DEV_W / 2, h.x));
         return { x: lerp(cx, h.x, t), y: lerp(o.y + DEV_H / 2, h.y, t) };
@@ -1063,59 +1261,57 @@
 
     // Граничные коннекторы составных Device и их связи с внешними линками.
     var boundary = {}, bcHasInner = {};
-    Object.keys(compIds).forEach(function (cid) {
+    Object.keys(compositeDeviceIds).forEach(function (cid) {
       var cd = devices[cid];
       if (cd.id === focusId) return;
-      m.connectors.filter(function (c) { return c.device_id === cd.id; }).forEach(function (bc) {
+      m.connectors.filter(function (c) { return c.component_id === cd.id; }).forEach(function (bc) {
         var partners = m.connections.filter(function (p) {
           return p.connector_a_id === bc.id || p.connector_b_id === bc.id;
         }).map(function (p) {
           return connectors[p.connector_a_id === bc.id ? p.connector_b_id : p.connector_a_id];
         });
         var inner = partners.filter(function (p) {
-          return p.device_id && devices[p.device_id].parent_device_id === cd.id;
+          return ownerKind(p, 'device') && devices[p.component_id].parent_id === cd.id;
         });
         bcHasInner[bc.id] = inner.length > 0;
-        partners.filter(function (p) { return p.link_id; }).forEach(function (ec) {
+        partners.filter(function (p) { return ownerKind(p, 'link'); }).forEach(function (ec) {
           boundary[ec.id] = { bc: bc, inner: inner[0] || null, cd: cd };
         });
       });
     });
 
     function connOpacity(c) {
-      if (c.link_id) {
-        var l = links[c.link_id];
-        var parent = linkParent(l, links);
+      if (ownerKind(c, 'link')) {
+        var l = links[c.component_id];
+        var parent = deviceParent(l, model.unitIndex);
         if (parent) return innerOpacity(parent);
         var b = boundary[c.id];
         if (b && b.inner) return 1 - tOf(b.cd.id);
         return 1;
       }
-      var o = devices[c.device_id];
-      if (o.parent_device_id) return innerOpacity(o.parent_device_id);
+      var o = devices[c.component_id];
+      if (o.parent_id) return innerOpacity(o.parent_id);
       if (o.id === focusId) return 1;
-      if (isComp(o) && bcHasInner[c.id]) return (1 - tOf(o.id)) * innerOpacity(o.parent_device_id);
+      if (isComposite(o) && bcHasInner[c.id]) return (1 - tOf(o.id)) * innerOpacity(o.parent_id);
       return 1;
     }
     function holdOpacity(h) {
-      if (h.device_id) { var o = devices[h.device_id]; return o.parent_device_id ? innerOpacity(o.parent_device_id) : 1; }
-      if (h.link_id) return innerOpacity(linkParent(links[h.link_id], links));
-      return innerOpacity(frameParent(frames[h.frame_id], frames));
+      return innerOpacity(deviceParent(units[h.unit_id], units));
     }
-    function frameGeom(f) {
-      var hs = m.holders.filter(function (h) { return h.frame_id === f.id && h.x != null; });
+    function baseUnitGeom(f) {
+      var hs = m.holders.filter(function (h) { return h.unit_id === f.id && h.x != null; });
       var x1, x2, y1, y2;
       if (hs.length) {
         var ps = hs.map(holdPos);
-        x1 = Math.min.apply(null, ps.map(function (p) { return p.x; })) - FRAME_PAD;
-        x2 = Math.max.apply(null, ps.map(function (p) { return p.x; })) + FRAME_PAD;
-        y1 = Math.min.apply(null, ps.map(function (p) { return p.y; })) - FRAME_PAD;
-        y2 = Math.max.apply(null, ps.map(function (p) { return p.y; })) + FRAME_PAD;
+        x1 = Math.min.apply(null, ps.map(function (p) { return p.x; })) - UNIT_PAD;
+        x2 = Math.max.apply(null, ps.map(function (p) { return p.x; })) + UNIT_PAD;
+        y1 = Math.min.apply(null, ps.map(function (p) { return p.y; })) - UNIT_PAD;
+        y2 = Math.max.apply(null, ps.map(function (p) { return p.y; })) + UNIT_PAD;
       } else {
-        x1 = f.x - FRAME_HALF; x2 = f.x + FRAME_HALF;
-        y1 = f.y; y2 = f.base_y != null ? f.base_y : f.y + 2 * FRAME_HALF;
+        x1 = f.x - UNIT_HALF; x2 = f.x + UNIT_HALF;
+        y1 = f.y; y2 = f.base_y != null ? f.base_y : f.y + 2 * UNIT_HALF;
       }
-      // Подпись Frame — внутри, у нижней границы: прямоугольник охватывает
+      // Подпись Unit — внутри, у нижней границы: прямоугольник охватывает
       // холдеры и строку подписи.
       var fw = f.name.length * 6, cx = (x1 + x2) / 2;
       y2 += 16;
@@ -1126,71 +1322,69 @@
     // Ось и направление отхода от края Device: нормаль к грани, наружу.
     function exitAt(pt, fb, lid) {
       var c = null;
-      m.connectors.forEach(function (cc) { if (cc.device_id && cc.x === pt.x && cc.y === pt.y) c = cc; });
+      m.connectors.forEach(function (cc) { if (ownerKind(cc, 'device') && cc.x === pt.x && cc.y === pt.y) c = cc; });
       if (!c) return fb ? 'h' : 'v';
-      var d = devices[c.device_id], s = devSize(d);
+      var d = devices[c.component_id], s = devSize(d);
       var horiz = Math.abs(pt.x - d.x) / (s.w / 2) >= Math.abs(pt.y - d.y) / (s.h / 2);
       var sg = horiz ? (pt.x >= d.x ? 1 : -1) : (pt.y >= d.y ? 1 : -1);
-      var inside = d.id === focusId || (lid && linkParent(links[lid], links) === d.id);
+      var inside = d.id === focusId || (lid && deviceParent(links[lid], model.unitIndex) === d.id);
       return { a: horiz ? 'h' : 'v', s: inside ? -sg : sg };
     }
-    function ownerName(c) {
-      if (c.device_id) return devices[c.device_id].name;
-      if (c.link_id) return links[c.link_id].name;
-      if (c.frame_id) return frames[c.frame_id].name;
-      return '—';
+    function ownerName(port) {
+      var owner = units[ownerId(port)];
+      return owner ? owner.name : '—';
     }
-    function compDesc(d) {
-      var nd = m.devices.filter(function (o) { return o.parent_device_id === d.id; }).length;
-      var nl = m.links.filter(function (o) { return o.parent_device_id === d.id; }).length;
-      var nf = m.frames.filter(function (o) { return o.parent_device_id === d.id; }).length;
-      return 'Составной Device: внутренняя схема — устройств: ' + nd + ', линков: ' + nl + ', фреймов: ' + nf + '.';
+    function compositeDeviceDesc(d) {
+      var nd = m.devices.filter(function (o) { return o.parent_id === d.id; }).length;
+      var nl = m.links.filter(function (o) { return o.parent_id === d.id; }).length;
+      var nu = m.baseUnits.filter(function (o) { return o.parent_id === d.id; }).length;
+      return entityDescription('device') + ' Составной Device: внутренняя схема — устройств: ' + nd + ', линков: ' + nl + ', базовых Unit: ' + nu + '.';
     }
 
-    var L = { containers: [], frames: [], links: [], devices: [], ports: [], labels: [], buttons: [], contacts: [] };
+    var L = { containers: [], baseUnits: [], links: [], devices: [], ports: [], labels: [], buttons: [], contacts: [] };
     if (focusId != null) m.connections.forEach(function (p) {
       var a = connectors[p.connector_a_id], b = connectors[p.connector_b_id];
-      if (b.device_id === focusId) { var swap = a; a = b; b = swap; }
-      if (a.device_id !== focusId || !b.device_id || b.device_id === focusId) return;
+      if (b.component_id === focusId) { var swap = a; a = b; b = swap; }
+      if (a.component_id !== focusId || !ownerKind(b, 'device') || b.component_id === focusId) return;
       var pts = [connPos(a), connPos(b)];
       L.contacts.push(orthoRoute(pts, pts, exitAt(pts[0], true), exitAt(pts[1], true)));
     });
 
     m.devices.forEach(function (d) {
-      if (d.x == null || !isComp(d)) return;
-      var op = innerOpacity(d.parent_device_id);
+      if (d.x == null || !isComposite(d)) return;
+      var op = innerOpacity(d.parent_id);
       if (op < 0.01) return;
       var s = devSize(d);
       L.containers.push({
         d: d, x: d.x - s.w / 2, y: d.y - s.h / 2, w: s.w, h: s.h, t: s.t,
         nameY: lerp(d.y - 3, d.y - s.h / 2 + 18, s.t),
         subY: lerp(d.y + 14, d.y - s.h / 2 + 33, s.t),
-        desc: compDesc(d), opacity: op
+        desc: compositeDeviceDesc(d), opacity: op
       });
       if (d.id !== focusId) L.buttons.push({ id: d.id, x: d.x + s.w / 2 - 14, y: d.y - s.h / 2 + 14, t: s.t, opacity: op });
     });
 
-    m.frames.forEach(function (f) {
+    m.baseUnits.forEach(function (f) {
       if (f.x == null) return;
-      var op = innerOpacity(frameParent(f, frames));
+      var op = innerOpacity(deviceParent(f, model.unitIndex));
       if (op < 0.01) return;
-      var gm = frameGeom(f);
-      var hs = m.holders.filter(function (h) { return h.frame_id === f.id; });
-      L.frames.push({
+      var gm = baseUnitGeom(f);
+      var hs = m.holders.filter(function (h) { return h.unit_id === f.id; });
+      L.baseUnits.push({
         f: f, x1: gm.x1, y1: gm.y1, x2: gm.x2, y2: gm.y2, labelY: gm.labelY, opacity: op,
-        inner: !!frameParent(f, frames),
-        desc: 'Несущая конструкция: ресурс не передаёт, коннекторов нет. Креплений (Holder): ' + hs.length + '.'
+        inner: !!deviceParent(f, model.unitIndex),
+        desc: entityDescription('unit') + ' Креплений (Holder): ' + hs.length + '.'
       });
     });
 
     m.links.forEach(function (l) {
       var pts = m.linkPoints.filter(function (p) { return p.link_id === l.id; });
       if (!pts.length) return;
-      var op = innerOpacity(linkParent(l, links));
+      var op = innerOpacity(deviceParent(l, model.unitIndex));
       if (op < 0.01) return;
       var adj = {};
       m.connectors.forEach(function (c) {
-        if (c.link_id === l.id && boundary[c.id]) {
+        if (c.component_id === l.id && boundary[c.id]) {
           var b = boundary[c.id], P = connPos(b.bc), t = tOf(b.cd.id);
           adj[c.x + ',' + c.y] = {
             P: P,
@@ -1231,49 +1425,51 @@
           if (!best || len > best.len) best = { len: len, x: (arr[i].x + arr[i - 1].x) / 2, y: (arr[i].y + arr[i - 1].y) / 2, dx: dx, dy: dy };
         }
       });
+      var res = l.resource_id ? resources[l.resource_id].name : 'не задан';
       var label = null;
       if (best) {
-        var w = l.name.length * 6;
+        var w = Math.max(l.name.length, res.length) * 6;
         var cx1 = null, cx2 = null;
-        if (l.parent_device_id) {
-          var cd = devices[l.parent_device_id], cs2 = devSize(cd);
+        var parentDeviceId = deviceParent(l, units);
+        if (parentDeviceId != null) {
+          var cd = devices[parentDeviceId], cs2 = devSize(cd);
           cx1 = cd.x - cs2.w / 2; cx2 = cd.x + cs2.w / 2;
         }
         if (Math.abs(best.dx) >= Math.abs(best.dy)) {
-          var y = best.len < 100 ? best.y - (DEV_H / 2 + 8) : best.y - 7;
+          var y = (best.len < 100 ? best.y - (DEV_H / 2 + 8) : best.y - 7) - 14;
           var x = best.x;
           if (cx1 != null) x = Math.max(cx1 + w / 2 + 4, Math.min(cx2 - w / 2 - 4, x));
           label = { name: l.name, x: x, y: y, anchor: 'middle', w: w, opacity: op };
         } else {
           var anchor = 'start', lx = best.x + 7;
           if (cx1 != null && lx + w > cx2 - 4) { anchor = 'end'; lx = best.x - 7; }
-          label = { name: l.name, x: lx, y: best.y + 4, anchor: anchor, w: w, opacity: op };
+          label = { name: l.name, x: lx, y: best.y - 3, anchor: anchor, w: w, opacity: op };
         }
+        label.resource = res;
       }
-      var cs = m.connectors.filter(function (c) { return c.link_id === l.id; });
-      var res = l.resource_id ? resources[l.resource_id].name : 'не задан';
-      var comp = l.parent_link_id ? ' Входит в состав Link: ' + links[l.parent_link_id].name + '.' : '';
-      if (l.parent_device_id) comp += ' Входит в состав Device: ' + devices[l.parent_device_id].name + '.';
-      var kids = m.links.filter(function (o) { return o.parent_link_id === l.id; });
-      if (kids.length) comp += ' Составной Link, секций: ' + kids.length + '.';
+      var cs = m.connectors.filter(function (c) { return c.component_id === l.id; });
+      var parentUnit = units[l.parent_id];
+      var composition = parentUnit ? ' Входит в состав ' + (parentUnit.kind === 'link' ? 'Link' : 'Device') + ': ' + parentUnit.name + '.' : '';
+      var kids = m.links.filter(function (o) { return o.parent_id === l.id; });
+      if (kids.length) composition += ' Составной Link, секций: ' + kids.length + '.';
       L.links.push({
         l: l, lines: out, label: label, opacity: op,
-        desc: 'Пассивно передаёт ресурс без изменения его вида. Ресурс: ' + res + '. Коннекторов: ' + cs.length + '.' + comp
+        desc: entityDescription('link') + ' Ресурс: ' + res + '. Коннекторов: ' + cs.length + '.' + composition
       });
       if (label) L.labels.push(label);
     });
 
     m.devices.forEach(function (d) {
-      if (d.x == null || isComp(d)) return;
-      var op = d.parent_device_id ? innerOpacity(d.parent_device_id) : 1;
+      if (d.x == null || isComposite(d)) return;
+      var op = d.parent_id ? innerOpacity(d.parent_id) : 1;
       if (op < 0.01) return;
-      var cs = m.connectors.filter(function (c) { return c.device_id === d.id; });
-      var hs = m.holders.filter(function (h) { return h.device_id === d.id; });
-      var parent = d.parent_device_id ? ' Входит в состав: ' + devices[d.parent_device_id].name + '.' : '';
+      var cs = m.connectors.filter(function (c) { return c.component_id === d.id; });
+      var hs = m.holders.filter(function (h) { return h.unit_id === d.id; });
+      var parent = d.parent_id ? ' Входит в состав: ' + devices[d.parent_id].name + '.' : '';
       var s = devSize(d);
       L.devices.push({
         d: d, x: d.x - s.w / 2, y: d.y - s.h / 2, w: s.w, h: s.h, opacity: op,
-        desc: 'Преобразует, накапливает, отдаёт или регулирует ресурс. Коннекторов: ' + cs.length + ', креплений: ' + hs.length + '.' + parent
+        desc: entityDescription('device') + ' Коннекторов: ' + cs.length + ', креплений: ' + hs.length + '.' + parent
       });
     });
 
@@ -1297,17 +1493,22 @@
           return g.members.some(function (o) { return o.id === p[aKey] || o.id === p[bKey]; });
         }).map(function (p) {
           var otherId = g.members.some(function (o) { return o.id === p[aKey]; }) ? p[bKey] : p[aKey];
-          var other = connectors[otherId] || holders[otherId];
+          var other = (kind === 'conn' ? connectors : holders)[otherId];
           return other ? other.name + ' (' + ownerName(other) + ')' : '—';
         });
         var res = g.members[0].resource_id && resources[g.members[0].resource_id] ? ' Ресурс: ' + resources[g.members[0].resource_id].name + '.' : '';
-        var od = null, of = null;
-        g.members.forEach(function (o) { if (o.device_id) od = o.device_id; if (o.frame_id) of = o.frame_id; });
+        var deviceId = null, baseUnitId = null;
+        g.members.forEach(function (port) {
+          var owner = units[ownerId(port)];
+          if (owner.kind === 'device') deviceId = owner.id;
+          if (owner.kind === 'unit') baseUnitId = owner.id;
+        });
         L.ports.push({
-          kind: kind, x: g.x, y: g.y, opacity: g.opacity,
-          pdev: od, pframe: od ? null : of,
+          kind: kind, members: g.members, x: g.x, y: g.y, opacity: g.opacity,
+          pdev: deviceId, pbaseUnit: deviceId != null ? null : baseUnitId,
           name: g.members.map(function (o) { return o.name; }).join(' ↔ '),
-          desc: names + '.' + (pairs.length ? ' Связан с: ' + pairs.join('; ') + '.' : '') + res
+          desc: entityDescription(kind === 'conn' ? 'connector' : 'holder') + ' ' + names + '.' +
+            (pairs.length ? ' Связан с: ' + pairs.join('; ') + '.' : '') + res
         });
       });
     }
@@ -1318,8 +1519,8 @@
     var placed = [];
     L.labels.forEach(function (t) {
       var x1 = t.anchor === 'middle' ? t.x - t.w / 2 : t.anchor === 'end' ? t.x - t.w : t.x;
-      var box = { x1: x1, x2: x1 + t.w, y1: t.y - 11, y2: t.y + 3 };
-      [0, -14, 14, -28, 28, -42, 42].some(function (dy) {
+      var box = { x1: x1, x2: x1 + t.w, y1: t.y - 11, y2: t.y + 17 };
+      [0, -28, 28, -56, 56, -84, 84].some(function (dy) {
         var b = { x1: box.x1, x2: box.x2, y1: box.y1 + dy, y2: box.y2 + dy };
         var hit = placed.some(function (p) { return b.x1 < p.x2 && p.x1 < b.x2 && b.y1 < p.y2 && p.y1 < b.y2; });
         if (!hit) { box = b; t.y += dy; }
@@ -1335,7 +1536,7 @@
     var xs = [], ys = [];
     L.containers.forEach(function (c) { xs.push(c.x, c.x + c.w); ys.push(c.y, c.y + c.h); });
     L.devices.forEach(function (d) { xs.push(d.x, d.x + d.w); ys.push(d.y, d.y + d.h); });
-    L.frames.forEach(function (f) { xs.push(f.x1, f.x2); ys.push(f.y1, f.labelY + 4); });
+    L.baseUnits.forEach(function (f) { xs.push(f.x1, f.x2); ys.push(f.y1, f.labelY + 4); });
     L.links.forEach(function (l) {
       l.lines.forEach(function (ln) {
         ln.pts.forEach(function (p) { xs.push(p.x); ys.push(p.y); });
@@ -1347,7 +1548,7 @@
       if (t.anchor === 'middle') xs.push(t.x - t.w / 2, t.x + t.w / 2);
       else if (t.anchor === 'end') xs.push(t.x - t.w, t.x);
       else xs.push(t.x, t.x + t.w);
-      ys.push(t.y - 11, t.y);
+      ys.push(t.y - 11, t.y + 17);
     });
     return {
       x1: Math.min.apply(null, xs) - 30, x2: Math.max.apply(null, xs) + 30,
@@ -1387,33 +1588,45 @@
       scene.scrollTop = ((vb.y1 + vb.y2) / 2 - world.y1) * zoom - scene.clientHeight / 2;
     }
 
-    function select(g, kind, name, desc) {
-      svg.querySelectorAll('.el').forEach(function (n) { n.classList.remove('sel'); });
-      svg.querySelectorAll('text.llabel').forEach(function (n) { n.classList.remove('sel'); });
+    function highlight(g) {
+      svg.querySelectorAll('.sel').forEach(function (n) { n.classList.remove('sel'); });
+      svg.classList.toggle('has-sel', !!g);
+      if (g) {
+        g.classList.add('sel');
+        L.labels.forEach(function (t) { if (t.group === g && t.node) t.node.classList.add('sel'); });
+      }
+    }
+    function select(g) {
+      highlight(g);
       if (!g) {
-        svg.classList.remove('has-sel');
+        selected = null;
+        document.getElementById('property-details').hidden = true;
+        document.getElementById('property-empty').hidden = false;
         return;
       }
-      g.classList.add('sel');
-      svg.classList.add('has-sel');
+      var type = g.dataset.entityType;
+      var rows = g.dataset.entityIds.split(',').map(function (id) { return byId(entityRows(placementModel, type))[id]; });
+      showProperties(type, rows);
     }
-    function clickable(g, kind, name, desc) {
+    function clickable(g, type, rows, description) {
       g.setAttribute('class', 'el');
-      g.addEventListener('click', function () { select(g, kind, name, desc); });
+      g.dataset.entityType = type;
+      g.dataset.entityIds = rows.map(function (row) { return row.id; }).join(',');
+      el('title', {}, g).textContent = rows.map(function (row) { return row.name; }).join(' ↔ ') + '\n' + (description || entityDescription(type));
+      g.addEventListener('click', function () { select(g); });
     }
     function groupOpacity(g, op) { if (op < 1) g.setAttribute('opacity', op.toFixed(3)); }
 
-    function drawFrame(f) {
-      var g = el('g', { 'data-frame': f.f.id }, svg);
+    function drawBaseUnit(f) {
+      var g = el('g', { 'data-base-unit': f.f.id }, svg);
       groupOpacity(g, f.opacity);
-      el('rect', { x: f.x1, y: f.y1, width: f.x2 - f.x1, height: f.y2 - f.y1, rx: 6, 'class': 'frame-rect' }, g);
+      el('rect', { x: f.x1, y: f.y1, width: f.x2 - f.x1, height: f.y2 - f.y1, rx: 6, 'class': 'base-unit-rect' }, g);
       el('rect', { x: f.x1, y: f.y1, width: f.x2 - f.x1, height: f.y2 - f.y1, 'class': 'hit' }, g);
-      txt(g, (f.x1 + f.x2) / 2, f.labelY, f.f.name, 'flabel');
-      clickable(g, 'Frame', f.f.name, f.desc);
+      txt(g, (f.x1 + f.x2) / 2, f.labelY, f.f.name, 'ulabel');
+      clickable(g, 'unit', [f.f], f.desc);
     }
-    // Внешние Frame — под контейнерами и Device (просвечивают через заливку),
-    // внутренние Frame составного Device — поверх фона контейнера, под его устройствами.
-    L.frames.forEach(function (f) { if (!f.inner) drawFrame(f); });
+    // Внутренние Unit рисуются поверх фона контейнера, внешние — под контейнерами.
+    L.baseUnits.forEach(function (f) { if (!f.inner) drawBaseUnit(f); });
 
     L.containers.forEach(function (c) {
       var g = el('g', c.d.id === focusId ? { 'class': 'field-boundary' } : { 'data-dev': c.d.id }, svg);
@@ -1422,11 +1635,11 @@
       txt(g, c.d.x, c.nameY, c.d.name, 'dlabel');
       txt(g, c.d.x, c.subY, 'Device (составной)', 'sub dlabel');
       el('rect', { x: c.x, y: c.y, width: c.w, height: c.h, 'class': 'hit' }, g);
-      if (c.d.id !== focusId) clickable(g, 'Device', c.d.name, 'Преобразует, накапливает, отдаёт или регулирует ресурс. ' + c.desc);
+      if (c.d.id !== focusId) clickable(g, 'device', [c.d], c.desc);
       if (c.d.id !== focusId && c.t > 0.5) el('rect', { x: c.x + c.w - 5, y: c.y + c.h - 5, width: 10, height: 10, 'class': 'rsz', 'data-rsz': c.d.id }, g);
     });
 
-    L.frames.forEach(function (f) { if (f.inner) drawFrame(f); });
+    L.baseUnits.forEach(function (f) { if (f.inner) drawBaseUnit(f); });
 
     L.contacts.forEach(function (pts) {
       el('polyline', { points: pts.map(function (p) { return p.x + ',' + p.y; }).join(' '), 'class': 'link field-boundary' }, svg);
@@ -1460,11 +1673,7 @@
           el('polyline', { points: es, 'class': 'link' }, eg);
         }
       });
-      g.setAttribute('class', 'el');
-      g.addEventListener('click', function () {
-        select(g, 'Link', l.l.name, l.desc);
-        if (l.label && l.label.node) l.label.node.classList.add('sel');
-      });
+      clickable(g, 'link', [l.l], l.desc);
       if (l.label) { l.label.group = g; l.label.desc = l.desc; }
     });
 
@@ -1474,29 +1683,32 @@
       el('rect', { x: d.x, y: d.y, width: d.w, height: d.h, rx: 4, 'class': 'dev' }, g);
       txt(g, d.d.x, d.d.y - 3, d.d.name, 'dlabel');
       txt(g, d.d.x, d.d.y + 14, 'Device', 'sub dlabel');
-      clickable(g, 'Device', d.d.name, d.desc);
+      clickable(g, 'device', [d.d], d.desc);
       el('rect', { x: d.x + d.w - 5, y: d.y + d.h - 5, width: 10, height: 10, 'class': 'rsz', 'data-rsz': d.d.id }, g);
     });
 
     L.ports.forEach(function (p) {
       var g = el('g', {}, svg);
       if (p.pdev) g.setAttribute('data-pdev', p.pdev);
-      if (p.pframe) g.setAttribute('data-pframe', p.pframe);
+      if (p.pbaseUnit) g.setAttribute('data-pbase-unit', p.pbaseUnit);
       groupOpacity(g, p.opacity);
       var r = p.kind === 'conn' ? 6 : 7;
       el('circle', { cx: p.x, cy: p.y, r: r, 'class': p.kind }, g);
       el('circle', { cx: p.x, cy: p.y, r: 16, 'class': 'hit' }, g);
-      clickable(g, p.kind === 'conn' ? 'Connector' : 'Holder', p.name, p.desc);
+      clickable(g, p.kind === 'conn' ? 'connector' : 'holder', p.members, p.desc);
     });
 
     L.labels.forEach(function (t) {
-      var n = txt(svg, t.x, t.y, t.name, 'llabel');
+      var n = txt(svg, t.x, t.y, '', 'llabel');
+      el('tspan', { x: t.x, dy: 0 }, n).textContent = t.name;
+      el('tspan', { x: t.x, dy: 14 }, n).textContent = t.resource;
       n.setAttribute('text-anchor', t.anchor);
       if (t.opacity < 1) n.setAttribute('opacity', t.opacity.toFixed(3));
       t.node = n;
+      el('title', {}, n).textContent = t.desc;
       if (t.group) n.addEventListener('click', function (e) {
         e.stopPropagation();
-        select(t.group, 'Link', t.name, t.desc);
+        select(t.group);
         n.classList.add('sel');
       });
     });
@@ -1530,7 +1742,11 @@
       if (!e.target.closest('.el')) select(null);
     });
     deselect = function () { select(null); };
-    select(null);
+    var selectedGroup = selected && Array.from(svg.querySelectorAll('.el')).find(function (g) {
+      return g.dataset.entityType === selected.type && g.dataset.entityIds.split(',').includes(String(selected.id));
+    });
+    if (selectedGroup) highlight(selectedGroup);
+    else select(null);
   }
 })();
 </script>

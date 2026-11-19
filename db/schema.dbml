@@ -1,92 +1,88 @@
-// Схема ядра DSM (учебная, только текущие сущности).
-// Дублирует db/init.sql. Логика: сущности и связи, без координат.
-// Сущности: Device, Link, Frame, Resource, Connector, Holder.
-// Ресурсное соединение = пара Connector↔Connector; механическая привязка = пара Holder↔Holder.
-// Представление: view + placement (геометрия в jsonb); новое представление не меняет логические таблицы.
+// Схема ядра DSM. Соответствует init.sql и результату migrate-unit-component.sql.
 
 Table resource {
   id integer [pk, increment]
   name text [not null, unique]
+  Note: 'Профиль ресурса; один экземпляр на профиль во всей модели'
+}
 
-  Note: 'Профиль ресурса; один экземпляр на профиль во всей модели (вода, электричество 230В, данные DALI…)'
+Table unit {
+  id integer [pk, increment]
+  name text [not null]
+  kind text [not null, note: "CHECK IN ('unit', 'device', 'link'); конкретная специализация"]
+  parent_id integer [ref: > unit.id]
+
+  indexes {
+    parent_id [name: 'unit_parent_idx']
+  }
+  Note: 'Материальная сущность. Общий PK во всей иерархии. Базовый Unit содержит только базовые Unit; Device — Unit/Device/Link; Link — только Link. CHECK запрещает self-parent. Отложенные constraint triggers на unit/component/device/link проверяют точное соответствие kind таблицам, исключают Device+Link и циклы, проверяют детей при смене kind. Изменения графа сериализованы advisory-блокировкой и требуют READ COMMITTED; TRUNCATE запрещён. PK/FK — обычный NO ACTION, без каскадного удаления'
+}
+
+Table component {
+  id integer [pk, ref: > unit.id]
+  Note: 'Общий уровень Device и Link с тем же ID Unit. При kind=unit строки Component нет; самостоятельный Component без Device/Link не допускается'
 }
 
 Table device {
-  id integer [pk, increment]
-  name text [not null]
-  parent_device_id integer [ref: > device.id]
-
-  Note: 'Устройство: преобразует, накапливает, отдаёт или регулирует ресурс. Составное Device содержит внутреннюю схему (Device + Link + Frame). Размещение — в placement'
+  id integer [pk, ref: > component.id]
+  Note: 'Устройство: преобразует, накапливает, отдаёт или регулирует ресурс. Имя и состав — только в unit'
 }
 
 Table link {
-  id integer [pk, increment]
-  name text [not null]
+  id integer [pk, ref: > component.id]
   resource_id integer [ref: > resource.id]
-  parent_device_id integer [ref: > device.id]
-  parent_link_id integer [ref: > link.id]
-
-  Note: 'Соединение: пассивно передаёт ресурс без изменения его вида. Составной Link (кабель → жилы); может входить в состав Device. Трасса — в placement'
-}
-
-Table frame {
-  id integer [pk, increment]
-  name text [not null]
-  parent_device_id integer [ref: > device.id]
-  parent_frame_id integer [ref: > frame.id]
-
-  Note: 'Несущая конструкция: ресурс не передаёт, коннекторов нет. Размещение — в placement'
+  Note: 'Соединение: пассивно передаёт ресурс. Имя и состав — только в unit. Ресурс необязателен; минимальное число коннекторов не ограничено'
 }
 
 Table connector {
   id integer [pk, increment]
   name text [not null]
-  device_id integer [ref: > device.id]
-  link_id integer [ref: > link.id]
+  component_id integer [not null, ref: > component.id]
   resource_id integer [ref: > resource.id]
-
-  Note: 'Разъём: точка подключения ресурса. Ровно один владелец: Device или Link (CHECK connector_one_owner). Позиция — в placement'
+  Note: 'Разъём: точка подключения ресурса. Ровно один владелец Component. Позиция — в placement'
 }
 
 Table holder {
   id integer [pk, increment]
   name text [not null]
-  device_id integer [ref: > device.id]
-  link_id integer [ref: > link.id]
-  frame_id integer [ref: > frame.id]
-
-  Note: 'Крепление: деталь или зона контакта. Ровно один владелец: Device, Link или Frame (CHECK holder_one_owner). Позиция — в placement'
+  unit_id integer [not null, ref: > unit.id]
+  Note: 'Крепление: деталь или зона механического контакта. Ровно один владелец Unit. Позиция — в placement'
 }
 
 Table connector_plug {
   id integer [pk, increment]
   connector_a_id integer [not null, ref: > connector.id]
   connector_b_id integer [not null, ref: > connector.id]
-
-  Note: 'Пара Connector↔Connector (через Link или прямой контакт). CHECK a < b; UNIQUE (a, b)'
+  indexes {
+    (connector_a_id, connector_b_id) [unique, name: 'connector_plug_pair_unique']
+  }
+  Note: 'Ресурсное соединение: пара Connector↔Connector. CHECK connector_a_id < connector_b_id'
 }
 
 Table holder_plug {
   id integer [pk, increment]
   holder_a_id integer [not null, ref: > holder.id]
   holder_b_id integer [not null, ref: > holder.id]
-
-  Note: 'Пара Holder↔Holder (контакт с Frame). CHECK a < b; UNIQUE (a, b)'
+  indexes {
+    (holder_a_id, holder_b_id) [unique, name: 'holder_plug_pair_unique']
+  }
+  Note: 'Механическая привязка: пара Holder↔Holder любых Unit. CHECK holder_a_id < holder_b_id'
 }
 
 Table view {
   id integer [pk, increment]
   name text [not null, unique]
-
-  Note: 'Представление модели: мнемосхема 2D, 3D и пр. Новое представление — новая запись, логическая схема не меняется'
+  Note: 'Представление модели: мнемосхема 2D, 3D и пр.'
 }
 
 Table placement {
   id integer [pk, increment]
   view_id integer [not null, ref: > view.id]
-  entity_type text [not null]
+  entity_type text [not null, note: "CHECK IN ('unit', 'connector', 'holder')"]
   entity_id integer [not null]
   geom jsonb [not null]
-
-  Note: 'Размещение сущности в представлении. Универсальная ссылка (entity_type + entity_id) без FK на логические таблицы; UNIQUE (view_id, entity_type, entity_id). geom: 2D {x, y[, w, h][, base_y]}, трасса Link {lines: [{line_no, points}]}. Внутренние Device/Frame/Link — относительно родителя, порты Device/Frame — относительно владельца, порты Link — в координатах трассы'
+  indexes {
+    (view_id, entity_type, entity_id) [unique, name: 'placement_unique']
+  }
+  Note: 'Универсальная ссылка без FK: unit для всех Unit/Device/Link, connector, holder. geom: Device {x,y,w,h}, базовый Unit {x,y,base_y}, Link {lines:[{line_no,points}]}. Device — относительно родительского Device, базовый Unit — непосредственного родителя, Link — ближайшего Device-предка (Link не задаёт начало координат); порты Link — в координатах трассы, остальные порты — относительно владельца'
 }
